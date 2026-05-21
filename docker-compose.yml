@@ -1,0 +1,41 @@
+services:
+  jushi-frontend:
+    build:
+      context: ./ui
+    ports:
+      - "80:80"
+    depends_on:
+      - jushi-api
+
+  jushi-api:
+    build:
+      context: ./backend
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env.example
+    depends_on:
+      - jushi-mysql
+      - jushi-port-list
+
+  jushi-port-list:
+    build:
+      context: ./backend
+    command: python port_list_app.py
+    ports:
+      - "8091:8091"
+    env_file:
+      - .env.example
+
+  jushi-mysql:
+    image: mysql:8.0
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: root_pass
+      MYSQL_DATABASE: jushi
+      MYSQL_USER: jushi
+      MYSQL_PASSWORD: jushi_pass
+    volumes:
+      - ./mysql/data:/var/lib/mysql
+      - ./backend/db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro

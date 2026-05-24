@@ -1,0 +1,30 @@
+ALERT_PATHS = {
+    "/api/alerts/list": {
+        "post": {
+            "tags": ["Alerts"],
+            "summary": "告警列表",
+            "responses": {"200": {"description": "告警列表"}},
+        }
+    },
+    "/api/alerts/create": {
+        "post": {
+            "tags": ["Alerts"],
+            "summary": "创建告警",
+            "responses": {"200": {"description": "创建结果"}},
+        }
+    },
+    "/api/alerts/resolve": {
+        "post": {
+            "tags": ["Alerts"],
+            "summary": "解决告警",
+            "responses": {"200": {"description": "解决结果"}},
+        }
+    },
+    "/api/alerts/ignore": {
+        "post": {
+            "tags": ["Alerts"],
+            "summary": "忽略告警",
+            "responses": {"200": {"description": "忽略结果"}},
+        }
+    },
+}

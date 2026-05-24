@@ -26,11 +26,13 @@ OPENAPI_SPEC = {
         {"name": "Alerts", "description": "告警"},
         {"name": "Logs", "description": "日志"},
     ],
+    "security": [{"BearerAuth": []}],
     "paths": {
         "/api/health": {
             "get": {
                 "tags": ["System"],
                 "summary": "健康检查",
+                "security": [],
                 "responses": {"200": {"description": "服务正常"}},
             }
         },
@@ -38,6 +40,7 @@ OPENAPI_SPEC = {
             "post": {
                 "tags": ["Auth"],
                 "summary": "用户登录",
+                "security": [],
                 "requestBody": {"$ref": "#/components/requestBodies/LoginBody"},
                 "responses": {"200": {"description": "登录成功"}},
             }
@@ -263,6 +266,14 @@ OPENAPI_SPEC = {
         },
     },
     "components": {
+        "securitySchemes": {
+            "BearerAuth": {
+                "type": "http",
+                "scheme": "bearer",
+                "bearerFormat": "Token",
+                "description": "登录成功后复制 token 到 Authorize，不需要手动添加 Bearer 前缀",
+            }
+        },
         "parameters": {
             "ItemId": {
                 "name": "item_id",

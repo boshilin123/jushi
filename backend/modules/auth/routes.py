@@ -17,7 +17,13 @@ def login():
 @auth_bp.post("/logout")
 def logout():
     # 用户登出入口，一期可前端清理 token，后续可接 token 黑名单。
-    return jsonify(service.logout())
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return jsonify({"is_success": False, "msg": "未登录"}), 401
+
+    token = auth_header.removeprefix("Bearer ").strip()
+    result, status_code = service.logout(token)
+    return jsonify(result), status_code
 
 
 @auth_bp.get("/me")

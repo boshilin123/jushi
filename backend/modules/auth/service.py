@@ -44,9 +44,16 @@ def login(payload: dict) -> tuple[dict, int]:
     }, 200
 
 
-def logout() -> dict:
+def logout(token: str) -> tuple[dict, int]:
     # 当前 token 是无状态签名 token，一期登出由前端删除本地 token 即可。
-    return {"is_success": True}
+    payload, error = parse_token(token)
+    if error:
+        return {"is_success": False, "msg": error}, 401
+
+    return {
+        "is_success": True,
+        "msg": "登出成功"
+    }, 200
 
 
 def current_user_from_token(token: str) -> tuple[dict, int]:

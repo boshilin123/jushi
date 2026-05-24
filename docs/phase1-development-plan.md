@@ -73,7 +73,7 @@ sys_user
 ```text
 id
 username
-password_hash
+password
 real_name
 role
 status

@@ -5,7 +5,7 @@ USE jushi;
 CREATE TABLE IF NOT EXISTS sys_user (
   id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '用户主键 ID',
   username VARCHAR(64) NOT NULL UNIQUE COMMENT '登录用户名，系统内唯一',
-  password_hash VARCHAR(255) NOT NULL COMMENT '密码哈希值，不保存明文密码',
+  password VARCHAR(128) NOT NULL COMMENT '登录密码，前期开发阶段暂存明文，后续上线前改为哈希',
   real_name VARCHAR(64) DEFAULT NULL COMMENT '用户真实姓名或展示名称',
   role VARCHAR(32) NOT NULL DEFAULT 'user' COMMENT '用户角色：admin 管理员，operator 运维人员，user 普通用户',
   status VARCHAR(32) NOT NULL DEFAULT 'active' COMMENT '用户状态：active 启用，disabled 禁用',
@@ -71,3 +71,18 @@ CREATE TABLE IF NOT EXISTS resource_snapshot (
   payload JSON NOT NULL COMMENT '资源快照内容 JSON',
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'
 ) COMMENT='资源快照表，用于保存集群资源统计结果';
+
+
+INSERT IGNORE INTO sys_user (
+  username,
+  password,
+  real_name,
+  role,
+  status
+) VALUES (
+  'admin',
+  'bluedot@123',
+  '系统管理员',
+  'admin',
+  'active'
+);

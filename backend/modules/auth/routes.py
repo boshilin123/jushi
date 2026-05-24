@@ -22,5 +22,11 @@ def logout():
 
 @auth_bp.get("/me")
 def me():
-    # 查询当前登录用户信息，前端用于恢复登录态和页面权限判断。
-    return jsonify(service.current_user())
+    # 前端携带 Authorization: Bearer <token>，后端解析后返回当前用户。
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return jsonify({"is_success": False, "msg": "未登录"}), 401
+
+    token = auth_header.removeprefix("Bearer ").strip()
+    result, status_code = service.current_user_from_token(token)
+    return jsonify(result), status_code

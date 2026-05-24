@@ -1,17 +1,33 @@
 import os
 
 from flask import Flask
+try:
+    from flask_cors import CORS
+except ModuleNotFoundError:
+    CORS = None
 
-from modules.alerts import alerts_bp
-from modules.auth import auth_bp
-from modules.deploy import deploy_bp
-from modules.docs import docs_bp
-from modules.logs import logs_bp
-from modules.pods import pods_bp
-from modules.ports import ports_bp
-from modules.resources import resources_bp
-from modules.system import system_bp
-from modules.users import users_bp
+try:
+    from backend.modules.alerts import alerts_bp
+    from backend.modules.auth import auth_bp
+    from backend.modules.deploy import deploy_bp
+    from backend.modules.docs import docs_bp
+    from backend.modules.logs import logs_bp
+    from backend.modules.pods import pods_bp
+    from backend.modules.ports import ports_bp
+    from backend.modules.resources import resources_bp
+    from backend.modules.system import system_bp
+    from backend.modules.users import users_bp
+except ModuleNotFoundError:
+    from modules.alerts import alerts_bp
+    from modules.auth import auth_bp
+    from modules.deploy import deploy_bp
+    from modules.docs import docs_bp
+    from modules.logs import logs_bp
+    from modules.pods import pods_bp
+    from modules.ports import ports_bp
+    from modules.resources import resources_bp
+    from modules.system import system_bp
+    from modules.users import users_bp
 
 
 def _resolve_docs_port() -> str:
@@ -27,6 +43,16 @@ def _resolve_docs_port() -> str:
 
 def create_app() -> Flask:
     app = Flask(__name__)
+    # 开发联调阶段允许 Swagger UI、Vite 前端等跨域请求后端 API。
+    if CORS:
+        CORS(app, resources={r"/api/*": {"origins": "*"}})
+    else:
+        @app.after_request
+        def add_cors_headers(response):
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-User"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+            return response
 
     # 按业务域注册接口模块；根路径 "/" 暂不占用，后续留给前端或网关。
     app.register_blueprint(system_bp)

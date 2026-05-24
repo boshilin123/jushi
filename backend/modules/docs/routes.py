@@ -13,7 +13,7 @@ OPENAPI_SPEC = {
         "description": "一期开发接口调试文档，覆盖用户、部署、端口、资源、Pod、告警和日志接口。",
     },
     "servers": [
-        {"url": "http://localhost:8080", "description": "Local API"},
+        {"url": "/", "description": "Current host"},
     ],
     "tags": [
         {"name": "System", "description": "系统健康检查"},
@@ -310,7 +310,7 @@ OPENAPI_SPEC = {
                 "type": "object",
                 "properties": {
                     "username": {"type": "string", "example": "admin"},
-                    "password": {"type": "string", "example": "admin123"},
+                    "password": {"type": "string", "example": "bluedot@123"},
                 },
                 "required": ["username", "password"],
             },

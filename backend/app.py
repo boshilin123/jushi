@@ -1,13 +1,15 @@
 import os
 
-from flask import Flask
+from flask import Flask, g, jsonify, request
 try:
     from flask_cors import CORS
 except ModuleNotFoundError:
     CORS = None
 
 try:
+    from backend.common.auth import parse_token
     from backend.modules.alerts import alerts_bp
+    from backend.modules.auth.repository import find_user_by_id as find_auth_user_by_id
     from backend.modules.auth import auth_bp
     from backend.modules.deploy import deploy_bp
     from backend.modules.docs import docs_bp
@@ -18,7 +20,9 @@ try:
     from backend.modules.system import system_bp
     from backend.modules.users import users_bp
 except ModuleNotFoundError:
+    from common.auth import parse_token
     from modules.alerts import alerts_bp
+    from modules.auth.repository import find_user_by_id as find_auth_user_by_id
     from modules.auth import auth_bp
     from modules.deploy import deploy_bp
     from modules.docs import docs_bp
@@ -30,6 +34,16 @@ except ModuleNotFoundError:
     from modules.users import users_bp
 
 
+AUTH_EXEMPT_PATHS = {
+    "/api/health",
+    "/api/auth/login",
+}
+AUTH_EXEMPT_PREFIXES = (
+    # 开发阶段放行 Swagger 文档，否则无法先打开页面调登录接口拿 token。
+    "/api/docs",
+)
+
+
 def _resolve_docs_port() -> str:
     # 兼容 python app.py 和 flask run 两种启动方式，尽量打印正确的 Swagger 端口。
     if os.getenv("FLASK_RUN_PORT"):
@@ -39,6 +53,47 @@ def _resolve_docs_port() -> str:
     if os.getenv("FLASK_RUN_FROM_CLI") == "true":
         return "5000"
     return "8080"
+
+
+def _is_auth_exempt(path: str) -> bool:
+    normalized = path.rstrip("/") or "/"
+    if normalized in AUTH_EXEMPT_PATHS:
+        return True
+    return any(normalized.startswith(prefix) for prefix in AUTH_EXEMPT_PREFIXES)
+
+
+def _register_auth_interceptor(app: Flask) -> None:
+    @app.before_request
+    def auth_interceptor():
+        # 统一拦截 /api/*，只放行登录、健康检查和开发文档。
+        if request.method == "OPTIONS":
+            return None
+        if not request.path.startswith("/api/"):
+            return None
+        if _is_auth_exempt(request.path):
+            return None
+
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return jsonify({"is_success": False, "msg": "未登录"}), 401
+
+        token = auth_header.removeprefix("Bearer ").strip()
+        if not token:
+            return jsonify({"is_success": False, "msg": "未登录"}), 401
+
+        payload, error = parse_token(token)
+        if error:
+            return jsonify({"is_success": False, "msg": error}), 401
+
+        user = find_auth_user_by_id(payload["id"])
+        if not user:
+            return jsonify({"is_success": False, "msg": "用户不存在"}), 401
+        if user.get("status") != "active":
+            return jsonify({"is_success": False, "msg": "用户已被禁用"}), 403
+
+        g.auth_token = token
+        g.current_user = user
+        return None
 
 
 def create_app() -> Flask:
@@ -53,6 +108,8 @@ def create_app() -> Flask:
             response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-User"
             response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
             return response
+
+    _register_auth_interceptor(app)
 
     # 按业务域注册接口模块；根路径 "/" 暂不占用，后续留给前端或网关。
     app.register_blueprint(system_bp)

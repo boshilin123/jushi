@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, g, jsonify, request
 
 from . import service
 
@@ -16,23 +16,13 @@ def login():
 
 @auth_bp.post("/logout")
 def logout():
-    # 用户登出入口，一期可前端清理 token，后续可接 token 黑名单。
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
-        return jsonify({"is_success": False, "msg": "未登录"}), 401
-
-    token = auth_header.removeprefix("Bearer ").strip()
+    # 登出接口的 token 校验已由全局拦截器完成，这里只处理登出业务语义。
+    token = getattr(g, "auth_token", "")
     result, status_code = service.logout(token)
     return jsonify(result), status_code
 
 
 @auth_bp.get("/me")
 def me():
-    # 前端携带 Authorization: Bearer <token>，后端解析后返回当前用户。
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
-        return jsonify({"is_success": False, "msg": "未登录"}), 401
-
-    token = auth_header.removeprefix("Bearer ").strip()
-    result, status_code = service.current_user_from_token(token)
-    return jsonify(result), status_code
+    # 当前用户由全局拦截器解析并挂到 g.current_user。
+    return jsonify({"is_success": True, "user": getattr(g, "current_user", None)})

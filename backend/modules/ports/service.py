@@ -12,7 +12,12 @@ def add_port(payload: dict) -> tuple[dict, int]:
     valid, message = validate_port_payload(payload)
     if not valid:
         return {"is_success": False, "msg": message}, 400
-    return repository.add_port_rule(payload), 200
+
+    rule, error = repository.add_port_rule(payload)
+    if error:
+        return {"is_success": False, "msg": error}, 409
+
+    return {"is_success": True, **rule}, 200
 
 
 def update_port(item_id: str, payload: dict) -> tuple[dict, int]:
@@ -20,12 +25,23 @@ def update_port(item_id: str, payload: dict) -> tuple[dict, int]:
     valid, message = validate_port_payload(payload)
     if not valid:
         return {"is_success": False, "msg": message}, 400
-    return repository.update_port_rule(item_id, payload), 200
+
+    rule, error = repository.update_port_rule(item_id, payload)
+    if error == "封闭端口不存在":
+        return {"is_success": False, "msg": error}, 404
+    if error:
+        return {"is_success": False, "msg": error}, 409
+
+    return {"is_success": True, **rule}, 200
 
 
-def delete_port(item_id: str) -> dict:
+def delete_port(item_id: str) -> tuple[dict, int]:
     # 删除封闭端口。
-    return repository.delete_port_rule(item_id)
+    result, error = repository.delete_port_rule(item_id)
+    if error:
+        return {"is_success": False, "msg": error}, 404
+
+    return {"is_success": True, **result}, 200
 
 
 def resolve_ports() -> dict:

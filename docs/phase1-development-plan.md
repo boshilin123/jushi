@@ -186,7 +186,7 @@ GPU_PROFILE = {
 
 ### 4. 封闭端口 / 端口避让类接口
 
-复用当前 `backend/modules/ports` 与独立端口服务 `port_list_app.py` 的 5 个接口：
+端口避让接口由 `jushi-api` 中的 `backend/modules/ports` 统一提供，不再单独部署 `jushi-port-list` 容器：
 
 ```http
 GET    /api/port-list/list
@@ -208,7 +208,7 @@ GET    /api/port-list/resolve
 
 前端需要把端口接口改为 `/api/port-list/*`。
 
-主服务创建实例时必须调用：
+主服务创建实例时直接复用端口模块生成避让快照，对外仍保留：
 
 ```http
 GET /api/port-list/resolve
@@ -432,8 +432,7 @@ backend/
 ├── scripts/
 │   ├── start.sh
 │   └── stop.sh
-├── Dockerfile
-└── port_list_app.py
+└── Dockerfile
 ```
 
 保留原始 `app_xxx.py` 文件作为部署适配参考，新版本逻辑逐步迁移到 `modules/*/service.py` 和 `services/*` 中。
@@ -462,15 +461,6 @@ services:
       - .env.example
     depends_on:
       - jushi-mysql
-      - jushi-port-list
-
-  jushi-port-list:
-    image: jushi-api
-    command: python port_list_app.py
-    ports:
-      - "8091:8091"
-    env_file:
-      - .env.example
 
   jushi-mysql:
     image: mysql:8.0

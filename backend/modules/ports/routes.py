@@ -31,7 +31,8 @@ def update_port(item_id):
 @ports_bp.delete("/delete/<item_id>")
 def delete_port(item_id):
     # 删除封闭端口规则，删除后该端口可重新进入随机分配范围。
-    return jsonify(service.delete_port(item_id))
+    result, status_code = service.delete_port(item_id)
+    return jsonify(result), status_code
 
 
 @ports_bp.get("/resolve")

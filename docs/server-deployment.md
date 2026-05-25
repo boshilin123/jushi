@@ -7,8 +7,7 @@
 推荐使用 Docker Compose 部署整套服务：
 
 - `jushi-frontend`：前端 nginx，负责静态页面和 `/api/` 反向代理。
-- `jushi-api`：后端 Flask 主服务。
-- `jushi-port-list`：端口列表辅助服务。
+- `jushi-api`：后端 Flask 主服务，包含端口避让接口 `/api/port-list/*`。
 - `jushi-mysql`：本项目独立 MySQL。
 
 不建议复用服务器上已有的 `yolo-anything-mysql`。原因是两个项目的数据、账号、初始化脚本和生命周期不同，复用同一个 MySQL 容器会增加误删数据和配置冲突风险。
@@ -21,7 +20,6 @@
 | --- | --- | --- | --- |
 | `jushi-frontend` | `80` | `18000` | 对外开放 |
 | `jushi-api` | `8080` | 不映射 | Docker 内网 |
-| `jushi-port-list` | `8091` | 不映射 | Docker 内网 |
 | `jushi-mysql` | `3306` | 不映射 | Docker 内网 |
 
 服务器安全组或防火墙只需要放行：
@@ -58,14 +56,12 @@ DCE_API_BASE=https://10.11.20.71:31123/apis/kpanda.io/v1alpha1
 DCE_CLUSTER=kpanda-global-cluster
 DCE_NAMESPACE=algorithm
 DCE_TOKEN="替换为实际 token"
-
-PORT_LIST_API_BASE=http://jushi-port-list:8091
 ```
 
 注意：
 
 - `MYSQL_HOST` 在 Compose 内部必须是 `jushi-mysql`。
-- `PORT_LIST_API_BASE` 在 Compose 内部必须是 `http://jushi-port-list:8091`。
+- 端口避让接口由 `jushi-api` 内部直接提供，不再需要独立 `PORT_LIST_API_BASE`。
 - `DCE_TOKEN`、`SECRET_KEY` 不要提交到公开仓库；如果已经暴露，需要及时更换。
 
 ## 4. 推荐 docker-compose 配置
@@ -89,16 +85,8 @@ services:
     env_file:
       - .env.example
     depends_on:
-      - jushi-mysql
-      - jushi-port-list
-    restart: unless-stopped
-
-  jushi-port-list:
-    build:
-      context: ./backend
-    command: python port_list_app.py
-    env_file:
-      - .env.example
+      jushi-mysql:
+        condition: service_healthy
     restart: unless-stopped
 
   jushi-mysql:
@@ -155,8 +143,20 @@ npm-debug.log
 
 ```bash
 cd /home/qhadmin/jushi
-docker compose up -d --build
+docker compose up -d --build --remove-orphans
 ```
+
+如果服务器上已经部署过旧版 4 容器架构，`--remove-orphans` 会移除不再出现在当前 `docker-compose.yml` 中的 `jushi-port-list` 容器。
+
+也可以按服务分步部署：
+
+```bash
+docker compose up -d jushi-mysql
+docker compose up -d --build --no-deps jushi-api
+docker compose up -d --build --no-deps jushi-frontend
+```
+
+其中 `jushi-api` 已配置依赖 `jushi-mysql` 健康检查；第一次完整部署仍推荐使用上面的完整部署命令。
 
 查看服务状态：
 
@@ -169,7 +169,6 @@ docker ps -a | grep jushi
 
 - `jushi-frontend` running
 - `jushi-api` running
-- `jushi-port-list` running
 - `jushi-mysql` running
 
 `docker images` 看到只有一个 `mysql:8.0` 是正常的。`docker images` 显示的是镜像，不是容器；多个 MySQL 容器可以共用同一个 `mysql:8.0` 镜像。
@@ -368,17 +367,11 @@ docker logs --tail=200 jushi-frontend
 docker logs --tail=200 jushi-mysql
 ```
 
-查看 port-list 服务日志：
-
-```bash
-docker logs --tail=200 jushi-port-list
-```
-
 ## 12. 部署完成标准
 
 满足以下条件后，可认为服务器部署基本完成：
 
-- `docker compose ps` 中 4 个服务都是 `running`。
+- `docker compose ps` 中 3 个服务都是 `running`。
 - `http://服务器IP:18000/` 可以打开前端。
 - `http://服务器IP:18000/api/docs` 可以打开 Swagger。
 - `http://服务器IP:18000/api/health` 返回成功。

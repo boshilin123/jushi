@@ -2,35 +2,38 @@ services:
   jushi-frontend:
     build:
       context: ./ui
+    container_name: jushi-frontend
     ports:
-      - "80:80"
+      - "18000:80"
     depends_on:
       - jushi-api
+    restart: unless-stopped
 
   jushi-api:
     build:
       context: ./backend
-    ports:
-      - "8080:8080"
+    container_name: jushi-api
     env_file:
       - .env.example
     depends_on:
-      - jushi-mysql
-      - jushi-port-list
+      jushi-mysql:
+        condition: service_healthy
+      jushi-port-list:
+        condition: service_started
+    restart: unless-stopped
 
   jushi-port-list:
     build:
       context: ./backend
+    container_name: jushi-port-list
     command: python port_list_app.py
-    ports:
-      - "8091:8091"
     env_file:
       - .env.example
+    restart: unless-stopped
 
   jushi-mysql:
     image: mysql:8.0
-    ports:
-      - "3306:3306"
+    container_name: jushi-mysql
     environment:
       MYSQL_ROOT_PASSWORD: root_pass
       MYSQL_DATABASE: jushi
@@ -39,3 +42,9 @@ services:
     volumes:
       - ./mysql/data:/var/lib/mysql
       - ./backend/db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-ujushi", "-pjushi_pass"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped

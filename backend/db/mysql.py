@@ -1,6 +1,10 @@
 import pymysql
 
-from backend.config import Config
+try:
+    from backend.config import Config
+except ModuleNotFoundError:
+    from config import Config
+
 
 
 def get_connection():

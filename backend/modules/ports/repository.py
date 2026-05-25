@@ -14,6 +14,7 @@ def _format_datetime(value):
 
 
 def _format_rule(row: dict) -> dict:
+    # 数据库 id 是数字，接口文档中 item_id 按字符串传递；这里统一转成字符串返回。
     return {
         "id": str(row["id"]),
         "port": row["port"],
@@ -24,6 +25,7 @@ def _format_rule(row: dict) -> dict:
 
 
 def _normalize_rule_payload(payload: dict) -> dict:
+    # service 层已经校验过端口范围；repository 只做入库前字段清洗。
     remark = str(payload.get("remark") or "").strip()
     return {
         "port": int(payload.get("port")),
@@ -40,6 +42,7 @@ def _parse_rule_id(item_id: str) -> int | None:
 
 
 def find_port_rule_by_id(item_id: str | int):
+    # 更新和删除前先查一次，避免把不存在的 id 静默当作成功。
     rule_id = _parse_rule_id(str(item_id))
     if rule_id is None:
         return None
@@ -74,7 +77,7 @@ def list_port_rules():
 
 
 def add_port_rule(payload: dict):
-    # 新增封闭端口规则，port_block_rule.port 唯一约束负责最终去重。
+    # 新增封闭端口规则，port_block_rule.port 唯一约束负责并发场景下的最终去重。
     data = _normalize_rule_payload(payload)
     sql = """
         INSERT INTO port_block_rule (port, remark)
@@ -131,7 +134,7 @@ def delete_port_rule(item_id: str):
 
 
 def resolve_blocked_ports():
-    # 生成端口避让快照，供创建实例前查询。
+    # 生成端口避让快照，后续创建 Deployment 随机 NodePort 前会直接读取这个列表。
     sql = """
         SELECT port
         FROM port_block_rule

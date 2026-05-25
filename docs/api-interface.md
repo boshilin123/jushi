@@ -285,7 +285,7 @@ POST /api/users/reset-password
 POST /api/cluster
 ```
 
-当前状态：一期需补齐。现有历史后端 `app_x86_195.py` 中已有类似实现。
+当前状态：后端已补齐。新版实现通过 `DCE_API_BASE` 和 `DCE_TOKEN` 调用 PaaS 集群列表接口。
 
 请求：
 
@@ -1455,7 +1455,6 @@ GET  /api/logs/pod
 一期还需补齐路由和实现：
 
 ```text
-POST /api/cluster
 POST /api/users/create
 POST /api/users/update
 POST /api/users/delete

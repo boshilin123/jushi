@@ -75,6 +75,14 @@ COMPONENTS = {
                 }
             },
         },
+        "ClusterEnvelope": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/ClusterEnvelope"}
+                }
+            },
+        },
         "PortBody": {
             "required": True,
             "content": {
@@ -169,6 +177,16 @@ COMPONENTS = {
                     },
                     "required": ["name"],
                 },
+            },
+            "required": ["msg_id", "serial", "context", "content"],
+        },
+        "ClusterEnvelope": {
+            "type": "object",
+            "properties": {
+                "msg_id": {"type": "string", "example": "cluster-001"},
+                "serial": {"type": "string", "example": "serial-001"},
+                "context": {"type": "string", "example": "query cluster"},
+                "content": {"type": "object", "example": {}},
             },
             "required": ["msg_id", "serial", "context", "content"],
         },

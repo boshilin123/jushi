@@ -14,6 +14,7 @@ def add_port(payload: dict) -> tuple[dict, int]:
         return {"is_success": False, "msg": message}, 400
 
     rule, error = repository.add_port_rule(payload)
+    # 重复端口由数据库唯一索引兜底，这里统一翻译成前端可识别的 409。
     if error:
         return {"is_success": False, "msg": error}, 409
 
@@ -27,6 +28,7 @@ def update_port(item_id: str, payload: dict) -> tuple[dict, int]:
         return {"is_success": False, "msg": message}, 400
 
     rule, error = repository.update_port_rule(item_id, payload)
+    # 更新接口需要区分“不存在”和“端口重复”，方便页面给出不同提示。
     if error == "封闭端口不存在":
         return {"is_success": False, "msg": error}, 404
     if error:

@@ -1,5 +1,6 @@
 from .alerts import ALERT_PATHS
 from .auth import AUTH_PATHS
+from .cluster import CLUSTER_PATHS
 from .components import COMPONENTS
 from .deploy import DEPLOY_PATHS
 from .logs import LOG_PATHS
@@ -14,6 +15,7 @@ TAGS = [
     {"name": "System", "description": "系统健康检查"},
     {"name": "Auth", "description": "登录与当前用户"},
     {"name": "Users", "description": "用户管理"},
+    {"name": "Cluster", "description": "集群查询"},
     {"name": "Deploy", "description": "推理部署生命周期"},
     {"name": "Ports", "description": "封闭端口 / 端口避让"},
     {"name": "Resources", "description": "集群资源"},
@@ -30,6 +32,7 @@ def build_openapi_spec() -> dict:
         SYSTEM_PATHS,
         AUTH_PATHS,
         USER_PATHS,
+        CLUSTER_PATHS,
         DEPLOY_PATHS,
         PORT_PATHS,
         RESOURCE_PATHS,

@@ -11,6 +11,7 @@ try:
     from backend.modules.alerts import alerts_bp
     from backend.modules.auth.repository import find_user_by_id as find_auth_user_by_id
     from backend.modules.auth import auth_bp
+    from backend.modules.cluster import cluster_bp
     from backend.modules.deploy import deploy_bp
     from backend.modules.docs import docs_bp
     from backend.modules.logs import logs_bp
@@ -24,6 +25,7 @@ except ModuleNotFoundError:
     from modules.alerts import alerts_bp
     from modules.auth.repository import find_user_by_id as find_auth_user_by_id
     from modules.auth import auth_bp
+    from modules.cluster import cluster_bp
     from modules.deploy import deploy_bp
     from modules.docs import docs_bp
     from modules.logs import logs_bp
@@ -116,6 +118,7 @@ def create_app() -> Flask:
     app.register_blueprint(docs_bp, url_prefix="/api/docs")
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(users_bp, url_prefix="/api/users")
+    app.register_blueprint(cluster_bp)
     app.register_blueprint(deploy_bp, url_prefix="/api/deploy")
     app.register_blueprint(ports_bp, url_prefix="/api/port-list")
     app.register_blueprint(resources_bp, url_prefix="/api/resources")

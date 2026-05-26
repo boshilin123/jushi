@@ -264,7 +264,15 @@ def check_available(payload: dict) -> dict:
     # ARM 旧脚本使用固定上限 12 张 Ascend310P；当 PaaS 暂无稳定资源字段时先保留这个兜底。
     if device_request["vendor"] == "Huawei" and gpu_total == 0:
         gpu_total = HUAWEI_FALLBACK_TOTAL
-    gpu_used = len(deployments)
+
+    # 新规则：优先使用 PaaS resourceSummary.allocated 中的 GPU 已分配数量。
+    # 如果 PaaS 没有返回该资源名，再退回旧脚本逻辑：用 Deployment 数量估算已占 GPU。
+    if resource_name in allocated:
+        gpu_used = _parse_int_quantity(allocated.get(resource_name))
+        gpu_used_source = "resourceSummary.allocated"
+    else:
+        gpu_used = len(deployments)
+        gpu_used_source = "deployment_count_fallback"
     gpu_available = max(gpu_total - gpu_used, 0)
     requested = device_request["requested"]
 
@@ -277,16 +285,17 @@ def check_available(payload: dict) -> dict:
         "available": gpu_available,
         "total": gpu_total,
         "used": gpu_used,
+        "used_source": gpu_used_source,
         "vendor": device_request["vendor"],
     }
     if gpu_available >= requested:
-        checks.append(_passed_check("gpu_available", "GPU 可用余量", f"可用 {gpu_available} 张", gpu_detail))
+        checks.append(_passed_check("gpu_available", "GPU 可用余量", f"可用 {gpu_available} / {gpu_total} 张", gpu_detail))
     else:
         checks.append(
             _failed_check(
                 "gpu_available",
                 "GPU 可用余量",
-                f"可用 {gpu_available} 张",
+                f"可用 {gpu_available} / {gpu_total} 张",
                 f"当前可用 {gpu_available} 张，申请 {requested} 张",
                 gpu_detail,
             )
@@ -410,6 +419,7 @@ def check_available(payload: dict) -> dict:
                 "available": gpu_available,
                 "total": gpu_total,
                 "used": gpu_used,
+                "used_source": gpu_used_source,
             }
         },
         "total_deployments": gpu_used,

@@ -1,3 +1,13 @@
+import json
+import os
+import random
+import re
+import socket
+import time
+import uuid
+
+from flask import g, request
+
 from . import repository
 from .model import build_deploy_record
 from .schema import get_deploy_name, validate_create_payload
@@ -16,6 +26,28 @@ MIN_CPU_M = 2000
 MIN_MEM_BYTES = 4 * 1024 ** 3
 NODEPORT_START = 30000
 NODEPORT_END = 59999
+NODEPORT_MAX_ATTEMPTS = int(os.getenv("NODEPORT_MAX_ATTEMPTS", "300"))
+
+NVIDIA_IMAGE = os.getenv(
+    "NVIDIA_IMAGE",
+    "nvidia/cuda:11.6.2-cudnn8-devel-ubuntu20.04_v1",
+)
+ALGORITHM_PACKAGE_HOST_DIR = os.getenv("ALGORITHM_PACKAGE_HOST_DIR", "/opt")
+NVIDIA_PACKAGE_NAME = os.getenv("NVIDIA_PACKAGE_NAME", "mtworkflow_x86.zip")
+NVIDIA_WORKDIR = os.getenv("NVIDIA_WORKDIR", "mtworkflow_x86")
+
+WORKSHOP_MODE_ENABLED = os.getenv("WORKSHOP_MODE_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+WORKSHOP_CLIENT_IPS = {
+    item.strip()
+    for item in os.getenv("WORKSHOP_CLIENT_IPS", "10.9.100.195").split(",")
+    if item.strip()
+}
+WORKSHOP_PORT_8018 = int(os.getenv("WORKSHOP_PORT_8018", "10001"))
+WORKSHOP_PORT_8019 = int(os.getenv("WORKSHOP_PORT_8019", "10002"))
+
+SHARED_DATA_ENABLED = os.getenv("SHARED_DATA_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+SHARED_DATA_HOST_PATH = os.getenv("SHARED_DATA_HOST_PATH", "/disks/sda/jx5000/")
+SHARED_DATA_MOUNT_PATH = os.getenv("SHARED_DATA_MOUNT_PATH", "/root/ADCShared/")
 
 GPU_DEVICE_MAP = {
     "NVIDIA/GPU": {
@@ -189,6 +221,251 @@ def _deployment_exists(deployments: list, name: str) -> bool:
         if metadata.get("name") == name:
             return True
     return False
+
+
+def _get_client_ip() -> str:
+    xff = request.headers.get("X-Forwarded-For", "")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.headers.get("X-Real-IP", "").strip() or (request.remote_addr or "")
+
+
+def _safe_shell_value(value: str) -> str:
+    # subip 会写入 initContainer 的 sed 命令，只允许 IP/主机名常见字符。
+    value = str(value or "").strip()
+    return value if re.fullmatch(r"[0-9A-Za-z_.:-]+", value) else "unknown"
+
+
+def _safe_label_value(value: str, default: str = "unknown") -> str:
+    value = re.sub(r"[^0-9A-Za-z_.-]+", "-", str(value or "").strip())[:63].strip(".-_")
+    return value or default
+
+
+def _current_creator(payload: dict) -> str:
+    content = payload.get("content", {}) or {}
+    current_user = getattr(g, "current_user", {}) or {}
+    return str(
+        content.get("creator")
+        or current_user.get("username")
+        or request.headers.get("X-User")
+        or request.headers.get("X-Forwarded-User")
+        or "unknown"
+    ).strip()
+
+
+def _is_workshop_request(client_ip: str) -> bool:
+    return WORKSHOP_MODE_ENABLED and client_ip in WORKSHOP_CLIENT_IPS
+
+
+def _precheck_passed(payload: dict, *, ignore_nodeport: bool = False) -> tuple[bool, dict, int]:
+    result = check_available(payload)
+    content = result.get("content", {}) if isinstance(result, dict) else {}
+    failed_checks = [
+        check for check in content.get("checks", []) or []
+        if check.get("status") == "failed" and not (ignore_nodeport and check.get("key") == "nodeport")
+    ]
+    if content.get("can_create") and not failed_checks:
+        return True, result, 200
+    if ignore_nodeport and not failed_checks and content.get("checks"):
+        content = {**content, "can_create": True, "reason": "资源预检通过"}
+        return True, {**result, "content": content, "status": 0, "http_status_code": 200, "is_success": True}, 200
+    return False, result, result.get("http_status_code", 400) if isinstance(result, dict) else 400
+
+
+def _occupied_node_ports(client: PaasClient) -> tuple[set[int], dict | None, int]:
+    path = f"/clusters/{Config.DCE_CLUSTER}/namespaces/{Config.DCE_NAMESPACE}/services"
+    status, result = client.request_with_status("GET", path)
+    if status != 200:
+        return set(), result if isinstance(result, dict) else {"response": result}, status
+    return _existing_node_ports(result), None, status
+
+
+def _is_port_locally_free(port: int) -> bool:
+    # 只能作为 API 容器所在环境的补充检查，真正集群占用仍以 PaaS Service 为准。
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind(("0.0.0.0", port))
+        except OSError:
+            return False
+    return True
+
+
+def _select_subport(client: PaasClient) -> tuple[int | None, dict | None, int]:
+    service_ports, service_error, service_status = _occupied_node_ports(client)
+    if service_error is not None:
+        return None, service_error, 502 if service_status != 504 else 504
+
+    try:
+        blocked_ports = set(resolve_blocked_ports().get("blocked_ports", []))
+    except Exception as exc:
+        return None, {"error": str(exc)}, 503
+
+    occupied = {
+        port for port in service_ports.union(blocked_ports)
+        if NODEPORT_START <= port <= NODEPORT_END
+    }
+    for _ in range(NODEPORT_MAX_ATTEMPTS):
+        port = random.randint(NODEPORT_START, NODEPORT_END)
+        if port in occupied:
+            continue
+        if _is_port_locally_free(port):
+            return port, None, 200
+
+    return None, {"error": f"No free port found in range {NODEPORT_START}-{NODEPORT_END}"}, 409
+
+
+def _service_nodeports_with_retry(client: PaasClient, name: str, retries: int = 10, sleep_s: float = 0.3) -> list[dict]:
+    path = f"/clusters/{Config.DCE_CLUSTER}/namespaces/{Config.DCE_NAMESPACE}/services/{name}"
+    for _ in range(retries):
+        status, result = client.request_with_status("GET", path)
+        if status == 200 and isinstance(result, dict):
+            ports = (result.get("spec", {}) or {}).get("ports", []) or []
+            node_ports = [
+                {"name": item.get("name", ""), "port": item.get("nodePort")}
+                for item in ports
+                if isinstance(item, dict) and item.get("nodePort") is not None
+            ]
+            if node_ports:
+                return node_ports
+        time.sleep(sleep_s)
+    return []
+
+
+def _build_deployment(
+    *,
+    name: str,
+    creator: str,
+    client_ip: str,
+    deploy_type: str,
+    device_request: dict,
+    subport: int,
+    workshop_mode: bool,
+) -> dict:
+    safe_creator = _safe_label_value(creator)
+    safe_client_ip = _safe_shell_value(client_ip)
+    created_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    gpu_count = str(device_request["requested"])
+    resource_name = device_request["resource_name"]
+
+    container_ports = [{"containerPort": 8018, "protocol": "TCP"}]
+    if workshop_mode:
+        container_ports[0]["hostPort"] = WORKSHOP_PORT_8018
+
+    volume_mounts = [
+        {"mountPath": "/workspace/Alg/", "name": "volume-alg"},
+        {"mountPath": "/dev/shm", "name": "volume-memory"},
+    ]
+    volumes = [
+        {"emptyDir": {}, "name": "volume-alg"},
+        {"hostPath": {"path": ALGORITHM_PACKAGE_HOST_DIR, "type": "Directory"}, "name": "volume-zip"},
+        {"emptyDir": {"medium": "Memory", "sizeLimit": "16Gi"}, "name": "volume-memory"},
+    ]
+    if SHARED_DATA_ENABLED:
+        volume_mounts.append({"mountPath": SHARED_DATA_MOUNT_PATH, "name": "volume-shared-data"})
+        volumes.append({"hostPath": {"path": SHARED_DATA_HOST_PATH, "type": "DirectoryOrCreate"}, "name": "volume-shared-data"})
+
+    init_command = (
+        f"cp /zip/{NVIDIA_PACKAGE_NAME} /workspace/Alg/ && "
+        f"unzip -o /workspace/Alg/{NVIDIA_PACKAGE_NAME} -d /workspace/Alg/ && "
+        f"sed -i '88s/\\\"subip\\\": *\\\"[^\\\"]*\\\"/\\\"subip\\\":\\\"{safe_client_ip}\\\"/;"
+        f"89s/\\\"subport\\\": *[0-9]\\+/\\\"subport\\\":{subport}/' "
+        f"/workspace/Alg/{NVIDIA_WORKDIR}/cfg/runmode.cfg"
+    )
+
+    return {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+            "name": name,
+            "namespace": Config.DCE_NAMESPACE,
+            "labels": {"app": name, "creator": safe_creator},
+            "annotations": {
+                "kpanda.io/alias-name": f"{creator}/{client_ip}" if client_ip else creator,
+                "createdAt": created_at,
+                "creatorIp": client_ip,
+                "deployType": deploy_type,
+                "workshopMode": "true" if workshop_mode else "false",
+            },
+        },
+        "spec": {
+            "replicas": 1,
+            "selector": {"matchLabels": {"app": name}},
+            "template": {
+                "metadata": {"labels": {"app": name, "creator": safe_creator}},
+                "spec": {
+                    "initContainers": [{
+                        "name": "init-copy-unzip",
+                        "image": "busybox",
+                        "imagePullPolicy": "IfNotPresent",
+                        "command": ["sh", "-c"],
+                        "args": [init_command],
+                        "volumeMounts": [
+                            {"name": "volume-alg", "mountPath": "/workspace/Alg/"},
+                            {"name": "volume-zip", "mountPath": "/zip"},
+                        ],
+                    }],
+                    "containers": [{
+                        "name": name,
+                        "image": NVIDIA_IMAGE,
+                        "imagePullPolicy": "IfNotPresent",
+                        "command": ["sh", "-c"],
+                        "args": [f"cd /workspace/Alg/{NVIDIA_WORKDIR}/; chmod +x mtworkflow*; stdbuf -o0 sh mtworkflow.sh;"],
+                        "ports": container_ports,
+                        "resources": {
+                            "limits": {"cpu": "8", "memory": "16Gi", resource_name: gpu_count},
+                            "requests": {"cpu": "1", "memory": "2Gi", resource_name: gpu_count},
+                        },
+                        "volumeMounts": volume_mounts,
+                    }],
+                    "volumes": volumes,
+                },
+            },
+        },
+    }
+
+
+def _build_service(*, name: str, creator: str, client_ip: str, deploy_type: str) -> dict:
+    created_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    safe_creator = _safe_label_value(creator)
+    return {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {
+            "name": name,
+            "namespace": Config.DCE_NAMESPACE,
+            "labels": {"app": name, "creator": safe_creator},
+            "annotations": {
+                "createdAt": created_at,
+                "creatorIp": client_ip,
+                "deployType": deploy_type,
+                "workshopMode": "false",
+            },
+        },
+        "spec": {
+            "type": "NodePort",
+            "selector": {"app": name},
+            "ports": [{"name": "tcp-8018", "port": 8018, "targetPort": 8018, "protocol": "TCP"}],
+        },
+    }
+
+
+def _paas_json_payload(kind: str, data: dict) -> dict:
+    payload = {
+        "cluster": Config.DCE_CLUSTER,
+        "namespace": Config.DCE_NAMESPACE,
+        "data": json.dumps(data, separators=(",", ":"), ensure_ascii=False),
+    }
+    if kind:
+        payload["kind"] = kind
+    return payload
+
+
+def _rollback_created_resources(client: PaasClient, name: str, *, service_created: bool) -> None:
+    if service_created:
+        service_path = f"/clusters/{Config.DCE_CLUSTER}/namespaces/{Config.DCE_NAMESPACE}/services/{name}"
+        client.request_with_status("DELETE", service_path)
+    deploy_path = f"/clusters/{Config.DCE_CLUSTER}/namespaces/{Config.DCE_NAMESPACE}/deployments/{name}"
+    client.request_with_status("DELETE", deploy_path)
 
 
 def check_available(payload: dict) -> dict:
@@ -425,14 +702,156 @@ def check_available(payload: dict) -> dict:
 
 
 def create_default(payload: dict) -> tuple[dict, int]:
-    # TODO: 按 deployType 区分 NVIDIA/Huawei，组装对应 Deployment/Service 模板后调用 PaaS。
     valid, message = validate_create_payload(payload)
     if not valid:
-        return {"is_success": False, "msg": message}, 400
+        return _response_envelope(payload, {"error": message}, 400, message, -1), 400
 
-    name = "pending-implementation"
-    repository.save_deploy_instance(build_deploy_record(name, payload))
-    return {"deployment_name": name, "payload": payload}, 200
+    device_request, error = _extract_device_request(payload)
+    if error:
+        return _response_envelope(payload, {"error": error}, 400, error, -1), 400
+    if device_request["vendor"] != "NVIDIA":
+        msg = "当前集群暂不支持 Huawei/Ascend310P"
+        return _response_envelope(payload, {"error": msg}, 400, msg, -1), 400
+    if not Config.DCE_API_BASE:
+        msg = "PaaS 地址未配置"
+        return _response_envelope(payload, {"error": "DCE_API_BASE is not configured"}, 500, msg, -1), 500
+    if not Config.DCE_TOKEN:
+        msg = "PaaS token 未配置"
+        return _response_envelope(payload, {"error": "DCE_TOKEN is not configured"}, 500, msg, -1), 500
+
+    content = payload.get("content", {}) or {}
+    deploy_type = str(content.get("deployType") or device_request["deploy_type"])
+    creator = _current_creator(payload)
+    client_ip = _get_client_ip()
+    workshop_mode = _is_workshop_request(client_ip)
+    client = PaasClient(Config.DCE_API_BASE, Config.DCE_TOKEN)
+
+    try:
+        with repository.deploy_create_lock():
+            # 创建链路必须在锁内重新预检，避免并发请求同时穿透资源和端口判断。
+            precheck_ok, precheck_result, precheck_http_status = _precheck_passed(
+                payload,
+                ignore_nodeport=workshop_mode,
+            )
+            if not precheck_ok:
+                return precheck_result, precheck_http_status
+
+            name = f"nvidia-cuda-{uuid.uuid4().hex[:6]}"
+            if workshop_mode:
+                subport = WORKSHOP_PORT_8019
+            else:
+                subport, port_error, port_status = _select_subport(client)
+                if port_error is not None or subport is None:
+                    msg = "可用端口选择失败"
+                    return _response_envelope(payload, port_error or {}, port_status, msg, -1), port_status
+
+            deployment = _build_deployment(
+                name=name,
+                creator=creator,
+                client_ip=client_ip,
+                deploy_type=deploy_type,
+                device_request=device_request,
+                subport=subport,
+                workshop_mode=workshop_mode,
+            )
+            deploy_path = f"/clusters/{Config.DCE_CLUSTER}/namespaces/{Config.DCE_NAMESPACE}/deployments/json"
+            deploy_status, deploy_result = client.request_with_status(
+                "POST",
+                deploy_path,
+                json_body=_paas_json_payload("deployments", deployment),
+            )
+            if not 200 <= deploy_status < 300:
+                msg = "Deployment 创建失败"
+                return _response_envelope(
+                    payload,
+                    {"error": msg, "response": deploy_result},
+                    deploy_status,
+                    msg,
+                    -1,
+                ), deploy_status
+
+            node_ports = []
+            if workshop_mode:
+                node_ports = [
+                    {"name": "tcp-8018", "port": WORKSHOP_PORT_8018},
+                    {"name": "tcp-8019", "port": WORKSHOP_PORT_8019},
+                ]
+                service_created = False
+            else:
+                service = _build_service(
+                    name=name,
+                    creator=creator,
+                    client_ip=client_ip,
+                    deploy_type=deploy_type,
+                )
+                service_path = f"/clusters/{Config.DCE_CLUSTER}/namespaces/{Config.DCE_NAMESPACE}/services"
+                service_status, service_result = client.request_with_status(
+                    "POST",
+                    service_path,
+                    json_body=_paas_json_payload("", service),
+                )
+                if not 200 <= service_status < 300:
+                    _rollback_created_resources(client, name, service_created=False)
+                    msg = "Service 创建失败"
+                    return _response_envelope(
+                        payload,
+                        {
+                            "error": msg,
+                            "response": service_result,
+                            "rollback": "deployment delete requested",
+                        },
+                        service_status,
+                        msg,
+                        -1,
+                    ), service_status
+
+                node_ports = _service_nodeports_with_retry(client, name)
+                node_ports.append({"name": "tcp-8019", "port": subport})
+                service_created = True
+
+            log_source = "paas"
+            record = build_deploy_record(
+                name,
+                {**payload, "content": {**content, "creator": creator}},
+                gpu_vendor=device_request["vendor"],
+                node_ports=node_ports,
+                log_path=None,
+                status="running",
+            )
+            try:
+                repository.save_deploy_instance(record)
+            except Exception as exc:
+                _rollback_created_resources(client, name, service_created=service_created)
+                msg = "实例记录写入失败"
+                return _response_envelope(
+                    payload,
+                    {
+                        "error": str(exc),
+                        "rollback": "created paas resources delete requested",
+                    },
+                    500,
+                    msg,
+                    -1,
+                ), 500
+
+            response_content = {
+                "deployment_name": name,
+                "node_ports": node_ports,
+                "devices": content.get("devices", {}),
+                "gpu_type": device_request["device_key"],
+                "deployType": deploy_type,
+                "log_path": None,
+                "log_source": log_source,
+                "workshop_mode": workshop_mode,
+                "client_ip": client_ip,
+            }
+            return _response_envelope(payload, response_content, 200, "OK", 0), 200
+    except repository.DeployCreateLockError as exc:
+        msg = str(exc)
+        return _response_envelope(payload, {"error": msg}, 409, msg, -1), 409
+    except Exception as exc:
+        msg = "创建部署失败"
+        return _response_envelope(payload, {"error": str(exc)}, 500, msg, -1), 500
 
 
 def retrieve(payload: dict) -> dict:

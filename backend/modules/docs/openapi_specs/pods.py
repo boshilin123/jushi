@@ -3,6 +3,12 @@ POD_PATHS = {
         "get": {
             "tags": ["Pods"],
             "summary": "Pod 列表",
+            "parameters": [
+                {"$ref": "#/components/parameters/Namespace"},
+                {"$ref": "#/components/parameters/DeploymentName"},
+                {"$ref": "#/components/parameters/PodPhase"},
+                {"$ref": "#/components/parameters/NodeName"},
+            ],
             "responses": {"200": {"description": "Pod 列表"}},
         }
     },
@@ -10,6 +16,10 @@ POD_PATHS = {
         "get": {
             "tags": ["Pods"],
             "summary": "Pod 详情",
+            "parameters": [
+                {"$ref": "#/components/parameters/Namespace"},
+                {"$ref": "#/components/parameters/PodName"},
+            ],
             "responses": {"200": {"description": "Pod 详情"}},
         }
     },
@@ -17,6 +27,11 @@ POD_PATHS = {
         "get": {
             "tags": ["Pods"],
             "summary": "Pod 日志",
+            "parameters": [
+                {"$ref": "#/components/parameters/Namespace"},
+                {"$ref": "#/components/parameters/PodName"},
+                {"$ref": "#/components/parameters/TailLines"},
+            ],
             "responses": {"200": {"description": "Pod 日志"}},
         }
     },
@@ -24,6 +39,7 @@ POD_PATHS = {
         "post": {
             "tags": ["Pods"],
             "summary": "删除 Pod",
+            "requestBody": {"$ref": "#/components/requestBodies/PodActionBody"},
             "responses": {"200": {"description": "删除结果"}},
         }
     },
@@ -31,6 +47,7 @@ POD_PATHS = {
         "post": {
             "tags": ["Pods"],
             "summary": "重启 Pod",
+            "requestBody": {"$ref": "#/components/requestBodies/PodActionBody"},
             "responses": {"200": {"description": "重启结果"}},
         }
     },

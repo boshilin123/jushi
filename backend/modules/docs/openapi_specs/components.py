@@ -13,12 +13,14 @@ COMPONENTS = {
             "in": "path",
             "required": True,
             "schema": {"type": "string"},
+            "example": "1",
         },
         "UserKeyword": {
             "name": "keyword",
             "in": "query",
             "required": False,
             "schema": {"type": "string"},
+            "example": "",
             "description": "按用户名或真实姓名模糊搜索",
         },
         "UserRole": {
@@ -26,6 +28,7 @@ COMPONENTS = {
             "in": "query",
             "required": False,
             "schema": {"type": "string", "enum": ["admin", "operator", "user"]},
+            "example": "admin",
             "description": "用户角色筛选",
         },
         "UserStatus": {
@@ -33,6 +36,7 @@ COMPONENTS = {
             "in": "query",
             "required": False,
             "schema": {"type": "string", "enum": ["active", "disabled"]},
+            "example": "active",
             "description": "用户状态筛选；不传时返回全部状态",
         },
         "Page": {
@@ -40,6 +44,7 @@ COMPONENTS = {
             "in": "query",
             "required": False,
             "schema": {"type": "integer", "default": 1, "minimum": 1},
+            "example": 1,
             "description": "页码",
         },
         "PageSize": {
@@ -47,7 +52,50 @@ COMPONENTS = {
             "in": "query",
             "required": False,
             "schema": {"type": "integer", "default": 20, "minimum": 1, "maximum": 100},
+            "example": 20,
             "description": "每页数量，最大 100",
+        },
+        "Namespace": {
+            "name": "namespace",
+            "in": "query",
+            "required": False,
+            "schema": {"type": "string"},
+            "example": "algorithm",
+        },
+        "DeploymentName": {
+            "name": "deployment_name",
+            "in": "query",
+            "required": False,
+            "schema": {"type": "string"},
+            "example": "nvidia-cuda-xxxxxx",
+        },
+        "PodName": {
+            "name": "pod_name",
+            "in": "query",
+            "required": True,
+            "schema": {"type": "string"},
+            "example": "nvidia-cuda-xxxxxx-abcde",
+        },
+        "PodPhase": {
+            "name": "phase",
+            "in": "query",
+            "required": False,
+            "schema": {"type": "string"},
+            "example": "Running",
+        },
+        "NodeName": {
+            "name": "node_name",
+            "in": "query",
+            "required": False,
+            "schema": {"type": "string"},
+            "example": "node-1",
+        },
+        "TailLines": {
+            "name": "tail_lines",
+            "in": "query",
+            "required": False,
+            "schema": {"type": "integer", "default": 200, "minimum": 1},
+            "example": 200,
         },
     },
     "requestBodies": {
@@ -63,7 +111,36 @@ COMPONENTS = {
             "required": True,
             "content": {
                 "application/json": {
-                    "schema": {"$ref": "#/components/schemas/DeployEnvelope"}
+                    "schema": {"$ref": "#/components/schemas/DeployEnvelope"},
+                    "examples": {
+                        "nvidia": {
+                            "summary": "NVIDIA 资源预检/创建",
+                            "value": {
+                                "msg_id": "check-001",
+                                "serial": "serial-001",
+                                "context": "check deploy available",
+                                "content": {
+                                    "devices": {"NVIDIA/GPU": 1},
+                                    "deployType": "NvidiaInfer",
+                                    "creator": "admin",
+                                },
+                            },
+                        },
+                        "huawei": {
+                            "summary": "Huawei Ascend 资源预检/创建",
+                            "value": {
+                                "msg_id": "check-huawei-001",
+                                "serial": "serial-001",
+                                "context": "check deploy available",
+                                "gpu_resource_name": "huawei.com/Ascend310P",
+                                "content": {
+                                    "devices": {"Huawei/Ascend310P": 1},
+                                    "deployType": "HuaweiInfer",
+                                    "creator": "admin",
+                                },
+                            },
+                        },
+                    },
                 }
             },
         },
@@ -71,7 +148,13 @@ COMPONENTS = {
             "required": True,
             "content": {
                 "application/json": {
-                    "schema": {"$ref": "#/components/schemas/NameEnvelope"}
+                    "schema": {"$ref": "#/components/schemas/NameEnvelope"},
+                    "example": {
+                        "msg_id": "retrieve-001",
+                        "serial": "serial-001",
+                        "context": "retrieve deploy",
+                        "content": {"name": "nvidia-cuda-xxxxxx"},
+                    },
                 }
             },
         },
@@ -79,7 +162,13 @@ COMPONENTS = {
             "required": True,
             "content": {
                 "application/json": {
-                    "schema": {"$ref": "#/components/schemas/ClusterEnvelope"}
+                    "schema": {"$ref": "#/components/schemas/ClusterEnvelope"},
+                    "example": {
+                        "msg_id": "cluster-001",
+                        "serial": "serial-001",
+                        "context": "query cluster",
+                        "content": {},
+                    },
                 }
             },
         },
@@ -87,7 +176,11 @@ COMPONENTS = {
             "required": True,
             "content": {
                 "application/json": {
-                    "schema": {"$ref": "#/components/schemas/PortRule"}
+                    "schema": {"$ref": "#/components/schemas/PortRule"},
+                    "example": {
+                        "port": 50055,
+                        "remark": "reserved port",
+                    },
                 }
             },
         },
@@ -95,7 +188,14 @@ COMPONENTS = {
             "required": True,
             "content": {
                 "application/json": {
-                    "schema": {"$ref": "#/components/schemas/UserCreateRequest"}
+                    "schema": {"$ref": "#/components/schemas/UserCreateRequest"},
+                    "example": {
+                        "username": "demo_operator",
+                        "password": "Init@123",
+                        "real_name": "演示运维用户",
+                        "role": "operator",
+                        "status": "active",
+                    },
                 }
             },
         },
@@ -103,7 +203,13 @@ COMPONENTS = {
             "required": True,
             "content": {
                 "application/json": {
-                    "schema": {"$ref": "#/components/schemas/UserUpdateRequest"}
+                    "schema": {"$ref": "#/components/schemas/UserUpdateRequest"},
+                    "example": {
+                        "id": 1,
+                        "real_name": "系统管理员",
+                        "role": "admin",
+                        "status": "active",
+                    },
                 }
             },
         },
@@ -111,7 +217,8 @@ COMPONENTS = {
             "required": True,
             "content": {
                 "application/json": {
-                    "schema": {"$ref": "#/components/schemas/UserIdRequest"}
+                    "schema": {"$ref": "#/components/schemas/UserIdRequest"},
+                    "example": {"id": 2},
                 }
             },
         },
@@ -119,7 +226,57 @@ COMPONENTS = {
             "required": True,
             "content": {
                 "application/json": {
-                    "schema": {"$ref": "#/components/schemas/UserResetPasswordRequest"}
+                    "schema": {"$ref": "#/components/schemas/UserResetPasswordRequest"},
+                    "example": {
+                        "id": 1,
+                        "password": "bluedot@123",
+                    },
+                }
+            },
+        },
+        "AlertListBody": {
+            "required": False,
+            "content": {
+                "application/json": {
+                    "schema": {"type": "object"},
+                    "example": {"level": "all", "limit": 20},
+                }
+            },
+        },
+        "AlertCreateBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/AlertCreateRequest"},
+                    "example": {
+                        "alert_type": "resource_insufficient",
+                        "alert_level": "high",
+                        "title": "GPU 资源不足",
+                        "message": "当前 GPU 可用数量不足",
+                        "source": "deploy",
+                        "target_name": "NVIDIA/GPU",
+                    },
+                }
+            },
+        },
+        "AlertActionBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/AlertActionRequest"},
+                    "example": {"id": "alert-001", "resolver": "admin"},
+                }
+            },
+        },
+        "PodActionBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/PodActionRequest"},
+                    "example": {
+                        "namespace": "algorithm",
+                        "pod_name": "nvidia-cuda-xxxxxx-abcde",
+                    },
                 }
             },
         },
@@ -141,7 +298,7 @@ COMPONENTS = {
                 "context": {"type": "string", "example": "create inference instance"},
                 "gpu_resource_name": {
                     "type": "string",
-                    "example": "huawei.com/Ascend310P",
+                    "description": "仅 Huawei 场景填写，如 huawei.com/Ascend310P；NVIDIA 场景不要填写",
                 },
                 "content": {"$ref": "#/components/schemas/DeployContent"},
             },
@@ -249,6 +406,37 @@ COMPONENTS = {
                 "password": {"type": "string", "example": "New@123"},
             },
             "required": ["id", "password"],
+        },
+        "AlertCreateRequest": {
+            "type": "object",
+            "properties": {
+                "alert_type": {"type": "string", "example": "resource_insufficient"},
+                "alert_level": {
+                    "type": "string",
+                    "enum": ["high", "medium", "low"],
+                    "example": "high",
+                },
+                "title": {"type": "string", "example": "GPU 资源不足"},
+                "message": {"type": "string", "example": "当前 GPU 可用数量不足"},
+                "source": {"type": "string", "example": "deploy"},
+                "target_name": {"type": "string", "example": "NVIDIA/GPU"},
+            },
+        },
+        "AlertActionRequest": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "example": "alert-001"},
+                "resolver": {"type": "string", "example": "admin"},
+            },
+            "required": ["id"],
+        },
+        "PodActionRequest": {
+            "type": "object",
+            "properties": {
+                "namespace": {"type": "string", "example": "algorithm"},
+                "pod_name": {"type": "string", "example": "nvidia-cuda-xxxxxx-abcde"},
+            },
+            "required": ["namespace", "pod_name"],
         },
     },
 }

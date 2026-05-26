@@ -16,7 +16,6 @@ MIN_CPU_M = 2000
 MIN_MEM_BYTES = 4 * 1024 ** 3
 NODEPORT_START = 30000
 NODEPORT_END = 59999
-HUAWEI_FALLBACK_TOTAL = 12
 
 GPU_DEVICE_MAP = {
     "NVIDIA/GPU": {
@@ -261,9 +260,6 @@ def check_available(payload: dict) -> dict:
 
     resource_name = device_request["resource_name"]
     gpu_total = _parse_int_quantity(allocatable.get(resource_name))
-    # ARM 旧脚本使用固定上限 12 张 Ascend310P；当 PaaS 暂无稳定资源字段时先保留这个兜底。
-    if device_request["vendor"] == "Huawei" and gpu_total == 0:
-        gpu_total = HUAWEI_FALLBACK_TOTAL
 
     # 新规则：优先使用 PaaS resourceSummary.allocated 中的 GPU 已分配数量。
     # 如果 PaaS 没有返回该资源名，再退回旧脚本逻辑：用 Deployment 数量估算已占 GPU。

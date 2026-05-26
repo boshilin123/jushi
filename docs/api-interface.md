@@ -12,13 +12,47 @@
 - 端口管理统一使用 `/api/port-list/*`，不再使用 `/api/ports/allowlist/*`
 - 前端如果通过 Vite 开发服务访问后端，需要设置 `VITE_API_BASE_URL=http://localhost:8080`
 
-当前后端仍是骨架实现，部分接口只返回占位数据。本文档以“一期应交付接口契约”为准，并在每个接口标注当前状态。
+当前后端仍有部分接口只返回占位数据。本文档以“一期应交付接口契约”为准，并在每个接口标注当前状态。
 
 ## 2. 通用约定
 
-### 2.1 统一请求包
+### 2.1 接口风格划分
 
-部署、告警、审计等 POST 接口建议使用统一请求结构：
+产品化后不强制所有接口使用同一种请求体。按接口类型分为两类：
+
+| 类型 | 适用接口 | 请求格式 | 说明 |
+| --- | --- | --- | --- |
+| 产品化 REST 接口 | 认证、用户、端口、资源、Pod、告警、日志等 | 直接 JSON、query 参数或 path 参数 | 面向页面管理能力，字段应贴近业务对象 |
+| 兼容部署 envelope 接口 | 集群、部署、审计等 POST 接口 | `msg_id` / `serial` / `context` / `content` | 兼容原服务器部署服务和当前前端适配层 |
+
+部署类接口本期继续使用 envelope，方便从原 `app_x86_195.py` / `app_arm_195.py` 迁移，并保持前端 `ui/src/api.ts` 的 `ApiEnvelope<T>` 可用。
+
+### 2.2 鉴权约定
+
+除以下接口外，所有 `/api/*` 业务接口都需要携带登录 token：
+
+```text
+GET  /api/health
+POST /api/auth/login
+GET  /api/docs
+GET  /api/docs/openapi.json
+```
+
+请求头：
+
+```http
+Authorization: Bearer <login_token>
+```
+
+说明：
+
+- 登录 token 来自 `/api/auth/login`，用于访问本系统后端。
+- `DCE_TOKEN` 是后端内部调用 PaaS/DCE 使用的 token，只配置在服务端环境变量中，前端、Swagger、curl 都不应该传入。
+- 旧版前端中的 `X-User` 只能作为创建人兜底信息，不能作为登录鉴权凭证。
+
+### 2.3 部署 envelope 请求包
+
+集群与部署类 POST 接口使用以下结构：
 
 ```json
 {
@@ -39,9 +73,15 @@
 | `content` | object | 是 | 业务参数 |
 | `gpu_resource_name` | string | 否 | Huawei 场景使用，如 `huawei.com/Ascend310P` |
 
-### 2.2 统一响应建议
+兼容规则：
 
-后端最终建议统一返回：
+- `/api/cluster` 可以接受没有 `content` 的旧请求；新请求建议统一传 `content: {}`。
+- `content.creator` 作为创建人优先来源；没有时后端可退回当前登录用户，再退回 `X-User` / `X-Forwarded-User`。
+- 部署类接口的响应建议继续回传 `msg_id`、`serial`、`context`，便于和历史服务及前端调试保持一致。
+
+### 2.4 响应包
+
+产品化 REST 接口可以返回简化结构：
 
 ```json
 {
@@ -52,7 +92,7 @@
 }
 ```
 
-如果接口需要兼容原始部署服务，也可以返回原有 envelope：
+部署类接口必须返回兼容原始部署服务的 envelope：
 
 ```json
 {
@@ -72,11 +112,43 @@
 }
 ```
 
-前端 `ui/src/api.ts` 当前按第二种 envelope 读取 `is_success`、`msg` 和 `content`。因此后端正式联调时必须保证：
+所有接口正式联调时必须保证：
 
 - HTTP 状态码成功时为 2xx
 - 响应体包含 `is_success`
 - 失败时响应体包含 `msg`
+- 失败时 HTTP 状态码和 `http_status_code` 保持一致
+
+部署类接口额外约定：
+
+| 字段 | 说明 |
+| --- | --- |
+| `status` | 语义状态，`0` 成功，`-1` 失败 |
+| `http_status_code` | HTTP 状态码镜像 |
+| `content` | 业务返回体或下游错误快照 |
+| `msg` | 给页面或 Swagger 展示的简短原因 |
+
+### 2.5 部署开发顺序约定
+
+后续部署类开发按以下顺序推进：
+
+```text
+1. POST /api/cluster
+2. POST /api/deploy/check-available
+3. POST /api/deploy/create-default
+4. POST /api/deploy/retrieve
+5. POST /api/deploy/list
+6. POST /api/deploy/release
+7. POST /api/deploy/reset
+```
+
+一期暂不优先开发：
+
+```text
+POST /api/deploy/queue
+```
+
+`queue` 只在资源不足排队能力重新纳入一期范围时实现。`stop` 和 `logs` 可以作为实例中心增强接口，在核心创建/释放链路稳定后补齐。
 
 ## 3. 用户认证接口
 
@@ -86,7 +158,7 @@
 POST /api/auth/login
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已补齐。登录成功后返回本系统登录 token。
 
 请求：
 
@@ -117,7 +189,7 @@ POST /api/auth/login
 POST /api/auth/logout
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已补齐。当前为轻量登出，后端校验 token，前端删除本地 token。
 
 响应：
 
@@ -133,7 +205,7 @@ POST /api/auth/logout
 GET /api/auth/me
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已补齐。通过 Bearer token 恢复当前用户。
 
 响应：
 
@@ -153,7 +225,7 @@ GET /api/auth/me
 GET /api/users/list
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已补齐。已接入 `sys_user` 表并支持基础筛选和分页。
 
 响应：
 
@@ -178,7 +250,7 @@ GET /api/users/list
 POST /api/users/create
 ```
 
-当前状态：一期需补齐。
+当前状态：后端已补齐。已接入 `sys_user` 表。
 
 请求：
 
@@ -207,7 +279,7 @@ POST /api/users/create
 POST /api/users/update
 ```
 
-当前状态：一期需补齐。
+当前状态：后端已补齐。已接入 `sys_user` 表。
 
 请求：
 
@@ -234,7 +306,7 @@ POST /api/users/update
 POST /api/users/delete
 ```
 
-当前状态：一期需补齐。建议做逻辑禁用，不做物理删除。
+当前状态：后端已补齐。当前实现为物理删除；如产品要求保留审计轨迹，建议后续改为逻辑禁用。
 
 请求：
 
@@ -258,7 +330,7 @@ POST /api/users/delete
 POST /api/users/reset-password
 ```
 
-当前状态：一期需补齐。
+当前状态：后端已补齐。当前阶段密码仍按 `init.sql` 约定明文保存，正式上线前应改为哈希。
 
 请求：
 
@@ -279,6 +351,84 @@ POST /api/users/reset-password
 
 ## 5. 集群与部署接口
 
+本节是后续部署类开发的主契约。除特别说明外，请求必须携带：
+
+```http
+Authorization: Bearer <login_token>
+Content-Type: application/json
+```
+
+后端调用 PaaS/DCE 时统一通过 `backend/services/paas_client.py`，不要在业务模块中重复拼装 HTTP 客户端。部署类接口统一读取 `DCE_API_BASE`、`DCE_CLUSTER`、`DCE_NAMESPACE`、`DCE_TOKEN`。
+
+### 5.0 部署公共字段
+
+#### 5.0.1 GPU 请求字段
+
+前端和接口请求继续使用产品字段：
+
+```json
+{
+  "devices": {
+    "NVIDIA/GPU": 1
+  },
+  "deployType": "NvidiaInfer",
+  "creator": "admin"
+}
+```
+
+后端内部统一映射：
+
+| 请求设备字段 | PaaS/K8s 资源名 | deployType | GPU 厂商 | 算法包 |
+| --- | --- | --- | --- | --- |
+| `NVIDIA/GPU` | `nvidia.com/gpu` | `NvidiaInfer` | `NVIDIA` | `mtworkflow_x86.zip` |
+| `Huawei/Ascend310P` | `huawei.com/Ascend310P` | `HuaweiInfer` | `Huawei` | `mtworkflow_arm.zip` |
+
+Huawei 请求建议同时传顶层 `gpu_resource_name`：
+
+```json
+{
+  "gpu_resource_name": "huawei.com/Ascend310P",
+  "content": {
+    "devices": {
+      "Huawei/Ascend310P": 1
+    },
+    "deployType": "HuaweiInfer",
+    "creator": "admin"
+  }
+}
+```
+
+#### 5.0.2 创建人字段
+
+创建人取值优先级：
+
+```text
+content.creator -> 当前登录用户 username -> X-User / X-Forwarded-User -> unknown
+```
+
+创建 Deployment / PodTemplate / Service 时建议写入：
+
+```text
+metadata.labels.creator
+metadata.annotations.createdAt
+metadata.annotations.creatorIp
+metadata.annotations.deployType
+```
+
+#### 5.0.3 名称字段
+
+查询、释放、重启、停止、日志接口统一从以下位置读取实例名：
+
+```json
+{
+  "content": {
+    "name": "nvidia-cuda-xxxxxx"
+  }
+}
+```
+
+如果缺少 `content.name`，返回 `400`。
+
 ### 5.1 集群查询
 
 ```http
@@ -298,10 +448,26 @@ POST /api/cluster
 }
 ```
 
+兼容旧请求：
+
+```json
+{
+  "msg_id": "q1",
+  "serial": "s-001",
+  "context": "optional"
+}
+```
+
 响应：
 
 ```json
 {
+  "msg_id": "cluster-001",
+  "serial": "serial-001",
+  "context": "query cluster",
+  "status": 0,
+  "http_status_code": 200,
+  "msg": "OK",
   "is_success": true,
   "content": {
     "items": []
@@ -309,13 +475,21 @@ POST /api/cluster
 }
 ```
 
+实现要求：
+
+- 只做实时查询，不写 MySQL，不缓存。
+- PaaS 路径为 `{DCE_API_BASE}/clusters`。
+- PaaS token 过期或缺失时返回清晰错误 envelope，不暴露 Flask traceback。
+
 ### 5.2 资源预检
 
 ```http
 POST /api/deploy/check-available
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已建路由，占位实现。下一步优先迁移旧版资源预检逻辑。
+
+目标：在创建部署前判断资源是否满足，后续 `create-default` 必须先复用同一套预检逻辑。
 
 NVIDIA 请求：
 
@@ -356,14 +530,20 @@ Huawei 请求：
 
 ```json
 {
+  "msg_id": "check-001_Resp",
+  "serial": "serial-001",
+  "context": "check deploy available",
+  "status": 0,
+  "http_status_code": 200,
+  "msg": "资源充足",
   "is_success": true,
   "content": {
     "can_create": true,
-    "reason": "resource available",
+    "reason": "资源充足",
     "cpu_available_m": 64000,
     "mem_available_bytes": 137438953472,
     "gpu_details": {
-      "NVIDIA/GPU": {
+      "nvidia.com/gpu": {
         "requested": 1,
         "available": 3,
         "total": 8,
@@ -378,6 +558,47 @@ Huawei 请求：
 }
 ```
 
+资源不足响应：
+
+```json
+{
+  "msg_id": "check-001_Resp",
+  "serial": "serial-001",
+  "context": "check deploy available",
+  "status": -1,
+  "http_status_code": 400,
+  "msg": "GPU 卡数量不足",
+  "is_success": false,
+  "content": {
+    "can_create": false,
+    "reason": "GPU 卡数量不足",
+    "cpu_available_m": 64000,
+    "mem_available_bytes": 137438953472,
+    "gpu_details": {
+      "nvidia.com/gpu": {
+        "requested": 2,
+        "available": 1,
+        "total": 4,
+        "used": 3
+      }
+    },
+    "total_deployments": 3,
+    "devices": {
+      "NVIDIA/GPU": 2
+    }
+  }
+}
+```
+
+实现要求：
+
+- NVIDIA 逻辑参考旧 `app_x86_195.py`：查询 `clusters/{cluster}` 的 `resourceSummary.allocatable/allocated`，并查询 `clusters/{cluster}/namespaces/{namespace}/deployments` 估算占卡数量。
+- Huawei 逻辑参考旧 `app_arm_195.py`：一期可先按 deployment 数量估算 Ascend310P 使用量；如果后续 PaaS 返回稳定 Ascend 资源字段，再切换到资源汇总判断。
+- 默认资源下限：CPU `2000m`，内存 `4GiB`。
+- `gpu_details` 的 key 使用 K8s 资源名，如 `nvidia.com/gpu`、`huawei.com/Ascend310P`。
+- 不在预检阶段创建 Deployment、Service 或写入 `deploy_instance`。
+- PaaS 查询失败返回 `502`；超时返回 `504`；参数错误返回 `400`。
+
 ### 5.3 创建推理部署
 
 ```http
@@ -388,10 +609,27 @@ POST /api/deploy/create-default
 
 请求同资源预检。
 
+行为要求：
+
+- 创建前必须调用资源预检；预检失败时直接返回 `400`，不得创建任何 PaaS 资源。
+- 按 `deployType` / `devices` 区分 NVIDIA 与 Huawei 模板。
+- 创建 Deployment 后，普通模式创建同名 NodePort Service；车间固定端口模式如继续沿用旧方案，可不创建 Service，但响应仍需返回固定端口。
+- 随机端口必须避开三类端口：
+  - `port_block_rule` 中的封闭端口，可直接调用 `backend/modules/ports/repository.py` 的 `resolve_blocked_ports()`。
+  - PaaS/Kubernetes 已存在 Service 的 `nodePort`。
+  - 宿主机已绑定端口。
+- 创建成功后写入 `deploy_instance` 表，至少保存 `deployment_name`、GPU 字段、`deploy_type`、`creator`、`status`、`node_ports`、`log_path`。
+
 响应：
 
 ```json
 {
+  "msg_id": "create-001_Resp",
+  "serial": "serial-001",
+  "context": "create inference instance",
+  "status": 0,
+  "http_status_code": 200,
+  "msg": "OK",
   "is_success": true,
   "content": {
     "deployment_name": "nvidia-cuda-xxxxxx",
@@ -411,6 +649,21 @@ POST /api/deploy/create-default
     "gpu_type": "NVIDIA/GPU",
     "deployType": "NvidiaInfer",
     "log_path": "/workspace/Alg/log/nvidia-cuda-xxxxxx"
+  }
+}
+```
+
+预检失败响应同 `5.2` 的资源不足响应。PaaS 创建失败时返回：
+
+```json
+{
+  "status": -1,
+  "http_status_code": 502,
+  "msg": "创建部署失败",
+  "is_success": false,
+  "content": {
+    "error": "create deployment failed",
+    "response": {}
   }
 }
 ```
@@ -440,10 +693,28 @@ POST /api/deploy/retrieve
 
 ```json
 {
+  "msg_id": "retrieve-001_Resp",
+  "serial": "serial-001",
+  "context": "retrieve deploy",
+  "status": 0,
+  "http_status_code": 200,
+  "msg": "OK",
   "is_success": true,
   "content": {
     "deployment": {},
-    "pods": [],
+    "pods": [
+      {
+        "pod_name": "nvidia-cuda-xxxxxx-abcde",
+        "namespace": "algorithm",
+        "phase": "Running",
+        "node_name": "node-1",
+        "pod_ip": "10.244.x.x",
+        "restart_count": 0,
+        "ready": true,
+        "created_at": "2026-05-21 15:30:00",
+        "containers": []
+      }
+    ],
     "summary": {
       "total_pods": 1,
       "running_pods": 1
@@ -451,6 +722,12 @@ POST /api/deploy/retrieve
   }
 }
 ```
+
+实现要求：
+
+- 查询 PaaS Deployment：`clusters/{cluster}/namespaces/{namespace}/deployments/{name}`。
+- 查询 Pod 时按 Deployment 标签或 owner 关联，优先复用历史脚本中的 labelSelector 方式。
+- Deployment 不存在返回 `404`，响应体仍保持 envelope。
 
 ### 5.5 释放部署
 
@@ -477,13 +754,29 @@ POST /api/deploy/release
 
 ```json
 {
+  "msg_id": "release-001_Resp",
+  "serial": "serial-001",
+  "context": "release deploy",
+  "status": 0,
+  "http_status_code": 200,
+  "msg": "OK",
   "is_success": true,
   "content": {
     "deployment_name": "nvidia-cuda-xxxxxx",
-    "status": "released"
+    "status": "released",
+    "deployment_delete": {},
+    "service_delete": {},
+    "log_path": "/workspace/Alg/log/nvidia-cuda-xxxxxx"
   }
 }
 ```
+
+实现要求：
+
+- 删除同名 Deployment 和 Service。
+- Service 不存在可视为释放成功，保持幂等。
+- 成功后更新 `deploy_instance.status = released`。
+- 不自动删除日志目录，只回传 `log_path`。
 
 ### 5.6 重启部署
 
@@ -510,12 +803,24 @@ POST /api/deploy/reset
 
 ```json
 {
+  "msg_id": "reset-001_Resp",
+  "serial": "serial-001",
+  "context": "restart deploy",
+  "status": 0,
+  "http_status_code": 200,
+  "msg": "OK",
   "is_success": true,
   "content": {
-    "deployment_name": "nvidia-cuda-xxxxxx"
+    "deployment_name": "nvidia-cuda-xxxxxx",
+    "response": {}
   }
 }
 ```
+
+实现要求：
+
+- 调用 PaaS restart 能力：`clusters/{cluster}/namespaces/{namespace}/deployments/{name}:restart`。
+- 重启失败时透传 PaaS 状态码和错误体到 `content.response`。
 
 ### 5.7 部署列表
 
@@ -540,6 +845,12 @@ POST /api/deploy/list
 
 ```json
 {
+  "msg_id": "list-001_Resp",
+  "serial": "serial-001",
+  "context": "list deploy",
+  "status": 0,
+  "http_status_code": 200,
+  "msg": "OK",
   "is_success": true,
   "content": {
     "items": [
@@ -557,6 +868,12 @@ POST /api/deploy/list
 }
 ```
 
+实现要求：
+
+- 第一期可以先返回 PaaS Deployment 列表的整理结果。
+- 如果 `deploy_instance` 中有本系统创建记录，应合并创建人、端口、日志路径和本地状态。
+- 后续需要“只看我的实例”时，可以按 `creator` label 或本地表筛选。
+
 ### 5.8 停止部署
 
 ```http
@@ -564,6 +881,8 @@ POST /api/deploy/stop
 ```
 
 当前状态：一期需补齐。前端适配层已预留该接口。
+
+优先级：低于 `check-available`、`create-default`、`retrieve`、`list`、`release`、`reset`。
 
 请求：
 
@@ -582,9 +901,18 @@ POST /api/deploy/stop
 
 ```json
 {
-  "is_success": true
+  "status": 0,
+  "http_status_code": 200,
+  "msg": "OK",
+  "is_success": true,
+  "content": {
+    "deployment_name": "nvidia-cuda-xxxxxx",
+    "status": "stopped"
+  }
 }
 ```
+
+说明：停止语义需要先确认 PaaS 支持方式。可选方案包括缩容副本数为 `0`、暂停业务流量、或仅更新本地状态。未确认前不要实现为删除资源。
 
 ### 5.9 资源不足排队
 
@@ -592,7 +920,7 @@ POST /api/deploy/stop
 POST /api/deploy/queue
 ```
 
-当前状态：一期需补齐。前端适配层已预留该接口。
+当前状态：一期暂缓。前端适配层已预留该接口，但一期核心交付不依赖该接口。
 
 请求：
 
@@ -623,6 +951,8 @@ POST /api/deploy/queue
 }
 ```
 
+说明：只有在重新纳入“一期资源不足排队”范围后再实现。当前资源不足应由 `check-available` 返回 `400` 和明确 reason。
+
 ### 5.10 部署日志
 
 ```http
@@ -630,6 +960,8 @@ POST /api/deploy/logs
 ```
 
 当前状态：一期需补齐。前端适配层已预留该接口。
+
+优先级：低于核心部署生命周期。可以在 `release/reset` 可用后补齐。
 
 请求：
 
@@ -648,6 +980,9 @@ POST /api/deploy/logs
 
 ```json
 {
+  "status": 0,
+  "http_status_code": 200,
+  "msg": "OK",
   "is_success": true,
   "content": [
     {
@@ -658,6 +993,12 @@ POST /api/deploy/logs
   ]
 }
 ```
+
+实现建议：
+
+- 实例日志优先读取 `/workspace/Alg/log/<deployment_name>`。
+- Pod 运行日志优先复用 `/api/pods/logs` 或 Kubernetes logs 能力。
+- 一期只返回最近 N 行，不做 WebSocket 或实时流。
 
 ## 6. 封闭端口 / 端口避让接口
 
@@ -679,7 +1020,7 @@ POST /api/deploy/logs
 GET /api/port-list/list
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已补齐。已接入 MySQL `port_block_rule` 表。
 
 响应：
 
@@ -703,7 +1044,7 @@ GET /api/port-list/list
 POST /api/port-list/add
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已补齐。已接入 MySQL `port_block_rule` 表。
 
 请求：
 
@@ -731,7 +1072,7 @@ POST /api/port-list/add
 PUT /api/port-list/update/{item_id}
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已补齐。已接入 MySQL `port_block_rule` 表。
 
 请求：
 
@@ -759,7 +1100,7 @@ PUT /api/port-list/update/{item_id}
 DELETE /api/port-list/delete/{item_id}
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已补齐。已接入 MySQL `port_block_rule` 表。
 
 响应：
 
@@ -776,7 +1117,7 @@ DELETE /api/port-list/delete/{item_id}
 GET /api/port-list/resolve
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已补齐。已接入 MySQL `port_block_rule` 表。
 
 响应：
 
@@ -1343,7 +1684,7 @@ POST /api/audits/export
 
 ### 11.1 GPU 字段
 
-前端可传：
+产品化页面可以使用更直观的字段：
 
 ```json
 {
@@ -1353,7 +1694,7 @@ POST /api/audits/export
 }
 ```
 
-但为了兼容当前前端 `ui/src/api.ts`，一期后端必须继续支持：
+但部署类接口一期必须继续支持当前前端 `ui/src/api.ts` 和旧服务器接口使用的 `devices` 格式：
 
 ```json
 {
@@ -1366,12 +1707,43 @@ POST /api/audits/export
 
 后端内部统一映射：
 
-| 前端字段 | 内部资源名 | deployType | 算法包 |
-| --- | --- | --- | --- |
-| `NVIDIA/GPU` | `nvidia.com/gpu` | `NvidiaInfer` | `mtworkflow_x86.zip` |
-| `Huawei/Ascend310P` | `huawei.com/Ascend310P` | `HuaweiInfer` | `mtworkflow_arm.zip` |
+| 前端字段 | 内部资源名 | deployType | GPU 厂商 | 算法包 |
+| --- | --- | --- | --- | --- |
+| `NVIDIA/GPU` | `nvidia.com/gpu` | `NvidiaInfer` | `NVIDIA` | `mtworkflow_x86.zip` |
+| `Huawei/Ascend310P` | `huawei.com/Ascend310P` | `HuaweiInfer` | `Huawei` | `mtworkflow_arm.zip` |
 
-### 11.2 端口字段
+实现要求：
+
+- 校验 `devices` 中只能出现当前支持的 GPU 字段。
+- `deployType` 必须和 GPU 字段匹配。
+- Huawei 场景如果传入顶层 `gpu_resource_name`，必须和映射表一致。
+- 响应中的 `gpu_details` 使用 K8s 资源名作为 key，实例列表可同时返回产品字段 `gpu_type`。
+
+### 11.2 部署 envelope 与产品字段
+
+当前前端部署接口使用 `ApiEnvelope<T>`，后端部署模块应直接兼容：
+
+```ts
+type ApiEnvelope<T> = {
+  msg_id: string;
+  serial: string;
+  context: string;
+  content: T;
+  gpu_resource_name?: string;
+}
+```
+
+部署开发时不要把 envelope 字段写入 Deployment 业务 spec；只把 `content` 中的部署字段、当前登录用户和运行环境配置用于创建资源。
+
+| 字段 | 来源 | 用途 |
+| --- | --- | --- |
+| `msg_id` / `serial` / `context` | 请求 envelope | 响应回传和链路追踪 |
+| `content.devices` | 前端选择 | 资源预检和容器 requests/limits |
+| `content.deployType` | 前端选择 | 区分 NVIDIA/Huawei 模板 |
+| `content.creator` | 前端或当前用户 | 写入 label/annotation 和本地表 |
+| `gpu_resource_name` | Huawei 兼容字段 | 指定底层 K8s 资源名 |
+
+### 11.3 端口字段
 
 端口接口统一使用：
 
@@ -1388,7 +1760,9 @@ POST /api/audits/export
 | `name` | 可忽略或写入 remark | 端口名称 |
 | `creator` | 可写入操作日志 | 创建人 |
 
-### 11.3 告警字段
+创建部署随机端口时不通过 HTTP 调用 `/api/port-list/resolve`，而是在后端内部直接复用端口模块的 repository/service，避免 `jushi-api` 自己请求自己。
+
+### 11.4 告警字段
 
 前端展示字段：
 
@@ -1423,6 +1797,11 @@ POST /api/auth/login
 POST /api/auth/logout
 GET  /api/auth/me
 GET  /api/users/list
+POST /api/users/create
+POST /api/users/update
+POST /api/users/delete
+POST /api/users/reset-password
+POST /api/cluster
 POST /api/deploy/check-available
 POST /api/deploy/create-default
 POST /api/deploy/retrieve
@@ -1452,13 +1831,39 @@ GET  /api/logs/instance
 GET  /api/logs/pod
 ```
 
-一期还需补齐路由和实现：
+其中已接入真实 MySQL 或 PaaS 能力的接口：
 
 ```text
+POST /api/auth/login
+POST /api/auth/logout
+GET  /api/auth/me
+GET  /api/users/list
 POST /api/users/create
 POST /api/users/update
 POST /api/users/delete
 POST /api/users/reset-password
+POST /api/cluster
+GET  /api/port-list/list
+POST /api/port-list/add
+PUT  /api/port-list/update/{item_id}
+DELETE /api/port-list/delete/{item_id}
+GET  /api/port-list/resolve
+```
+
+部署类下一步优先补齐实现：
+
+```text
+POST /api/deploy/check-available
+POST /api/deploy/create-default
+POST /api/deploy/retrieve
+POST /api/deploy/list
+POST /api/deploy/release
+POST /api/deploy/reset
+```
+
+后续增强或暂缓接口：
+
+```text
 POST /api/deploy/stop
 POST /api/deploy/queue
 POST /api/deploy/logs
@@ -1471,4 +1876,5 @@ POST /api/audits/export
 
 ```text
 把 /api/ports/allowlist/* 改为 /api/port-list/*
+请求头补充 Authorization: Bearer <login_token>
 ```

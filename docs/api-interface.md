@@ -57,7 +57,7 @@ Authorization: Bearer <login_token>
 ```json
 {
   "msg_id": "create-001",
-  "serial": "serial-001",
+  "serial": "create-serial-001",
   "context": "create inference instance",
   "content": {}
 }
@@ -78,6 +78,20 @@ Authorization: Bearer <login_token>
 - `/api/cluster` 可以接受没有 `content` 的旧请求；新请求建议统一传 `content: {}`。
 - `content.creator` 作为创建人优先来源；没有时后端可退回当前登录用户，再退回 `X-User` / `X-Forwarded-User`。
 - 部署类接口的响应建议继续回传 `msg_id`、`serial`、`context`，便于和历史服务及前端调试保持一致。
+- 部署类接口会按动作校验 `msg_id`、`serial` 和 `context`；前端必须传对应动作的前缀和上下文，否则返回 `400`。
+
+部署类动作约束：
+
+| 接口 | `msg_id` / `serial` 前缀 | `context` |
+| --- | --- | --- |
+| `POST /api/deploy/check-available` | `check-` | `check deploy available` |
+| `POST /api/deploy/create-default` | `create-` | `create inference instance` |
+| `POST /api/deploy/retrieve` | `retrieve-` | `retrieve deploy` |
+| `POST /api/deploy/list` | `list-` | `list deploy` |
+| `POST /api/deploy/release` | `release-` | `release deploy` |
+| `POST /api/deploy/reset` | `reset-` | `restart deploy` |
+| `POST /api/deploy/stop` | `stop-` | `stop deploy` |
+| `POST /api/deploy/logs` | `logs-` | `deploy logs` |
 
 ### 2.4 响应包
 
@@ -99,7 +113,7 @@ Authorization: Bearer <login_token>
   "msg_id": "create-001_Resp",
   "head_id": 0,
   "context": "create inference instance",
-  "serial": "serial-001",
+  "serial": "create-serial-001",
   "version": "1.0.0.1",
   "status": 0,
   "content": {},
@@ -487,7 +501,7 @@ POST /api/cluster
 POST /api/deploy/check-available
 ```
 
-当前状态：后端已建路由，占位实现。下一步优先迁移旧版资源预检逻辑。
+当前状态：后端已实现。已接入 PaaS 集群资源、Deployment、Service 和端口避让检查。
 
 目标：在创建部署前判断资源是否满足，后续 `create-default` 必须先复用同一套预检逻辑。
 
@@ -496,7 +510,7 @@ NVIDIA 请求：
 ```json
 {
   "msg_id": "check-001",
-  "serial": "serial-001",
+  "serial": "check-serial-001",
   "context": "check deploy available",
   "content": {
     "devices": {
@@ -513,7 +527,7 @@ Huawei 请求：
 ```json
 {
   "msg_id": "check-002",
-  "serial": "serial-002",
+  "serial": "check-serial-002",
   "context": "check deploy available",
   "gpu_resource_name": "huawei.com/Ascend310P",
   "content": {
@@ -531,7 +545,7 @@ Huawei 请求：
 ```json
 {
   "msg_id": "check-001_Resp",
-  "serial": "serial-001",
+  "serial": "check-serial-001",
   "context": "check deploy available",
   "status": 0,
   "http_status_code": 200,
@@ -563,7 +577,7 @@ Huawei 请求：
 ```json
 {
   "msg_id": "check-001_Resp",
-  "serial": "serial-001",
+  "serial": "check-serial-001",
   "context": "check deploy available",
   "status": -1,
   "http_status_code": 400,
@@ -605,9 +619,24 @@ Huawei 请求：
 POST /api/deploy/create-default
 ```
 
-当前状态：后端已建路由，占位实现。正式实现需迁移历史后端创建 Deployment + Service 的能力。
+当前状态：后端已实现 NVIDIA 最小闭环。创建成功后会创建 PaaS Deployment / Service，并写入 `deploy_instance` 表。
 
-请求同资源预检。
+NVIDIA 请求：
+
+```json
+{
+  "msg_id": "create-001",
+  "serial": "create-serial-001",
+  "context": "create inference instance",
+  "content": {
+    "devices": {
+      "NVIDIA/GPU": 1
+    },
+    "deployType": "NvidiaInfer",
+    "creator": "admin"
+  }
+}
+```
 
 行为要求：
 
@@ -625,7 +654,7 @@ POST /api/deploy/create-default
 ```json
 {
   "msg_id": "create-001_Resp",
-  "serial": "serial-001",
+  "serial": "create-serial-001",
   "context": "create inference instance",
   "status": 0,
   "http_status_code": 200,
@@ -674,14 +703,14 @@ POST /api/deploy/create-default
 POST /api/deploy/retrieve
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已实现。返回前端实例详情展示字段，不透传完整 PaaS 原始对象，不写数据库。
 
 请求：
 
 ```json
 {
   "msg_id": "retrieve-001",
-  "serial": "serial-001",
+  "serial": "retrieve-serial-001",
   "context": "retrieve deploy",
   "content": {
     "name": "nvidia-cuda-xxxxxx"
@@ -694,31 +723,24 @@ POST /api/deploy/retrieve
 ```json
 {
   "msg_id": "retrieve-001_Resp",
-  "serial": "serial-001",
+  "serial": "retrieve-serial-001",
   "context": "retrieve deploy",
   "status": 0,
   "http_status_code": 200,
   "msg": "OK",
   "is_success": true,
   "content": {
-    "deployment": {},
-    "pods": [
-      {
-        "pod_name": "nvidia-cuda-xxxxxx-abcde",
-        "namespace": "algorithm",
-        "phase": "Running",
-        "node_name": "node-1",
-        "pod_ip": "10.244.x.x",
-        "restart_count": 0,
-        "ready": true,
-        "created_at": "2026-05-21 15:30:00",
-        "containers": []
-      }
-    ],
-    "summary": {
-      "total_pods": 1,
-      "running_pods": 1
-    }
+    "instance_name": "nvidia-cuda-xxxxxx",
+    "workload_id": "nvidia-cuda-xxxxxx",
+    "status": "Running",
+    "creator": "admin",
+    "created_at": "2026-05-26 11:08:28",
+    "deploy_area": "qhvgpu1",
+    "replica_count": "1/1 个",
+    "service_endpoint": "10.11.20.71",
+    "open_ports": [30001],
+    "resource_mode": "物理 GPU",
+    "bound_resource": "qhvgpu1 / nvidia.com/gpu x1"
   }
 }
 ```
@@ -727,6 +749,10 @@ POST /api/deploy/retrieve
 
 - 查询 PaaS Deployment：`clusters/{cluster}/namespaces/{namespace}/deployments/{name}`。
 - 查询 Pod 时按 Deployment 标签或 owner 关联，优先复用历史脚本中的 labelSelector 方式。
+- 查询同名 Service，提取 `spec.ports[].nodePort` 作为 `open_ports`。
+- `service_endpoint` 当前返回创建接口写入 Deployment annotation 的 `creatorIp`。
+- `deploy_area` 返回关联 Pod 所在节点名；`replica_count` 返回 `ready_pods / replicas`。
+- `resource_mode` 当前统一返回 `物理 GPU`；`bound_resource` 由节点名和 GPU resource limit 拼装。
 - Deployment 不存在返回 `404`，响应体仍保持 envelope。
 
 ### 5.5 释放部署
@@ -742,7 +768,7 @@ POST /api/deploy/release
 ```json
 {
   "msg_id": "release-001",
-  "serial": "serial-001",
+  "serial": "release-serial-001",
   "context": "release deploy",
   "content": {
     "name": "nvidia-cuda-xxxxxx"
@@ -755,7 +781,7 @@ POST /api/deploy/release
 ```json
 {
   "msg_id": "release-001_Resp",
-  "serial": "serial-001",
+  "serial": "release-serial-001",
   "context": "release deploy",
   "status": 0,
   "http_status_code": 200,
@@ -791,7 +817,7 @@ POST /api/deploy/reset
 ```json
 {
   "msg_id": "reset-001",
-  "serial": "serial-001",
+  "serial": "reset-serial-001",
   "context": "restart deploy",
   "content": {
     "name": "nvidia-cuda-xxxxxx"
@@ -804,7 +830,7 @@ POST /api/deploy/reset
 ```json
 {
   "msg_id": "reset-001_Resp",
-  "serial": "serial-001",
+  "serial": "reset-serial-001",
   "context": "restart deploy",
   "status": 0,
   "http_status_code": 200,
@@ -835,7 +861,7 @@ POST /api/deploy/list
 ```json
 {
   "msg_id": "list-001",
-  "serial": "serial-001",
+  "serial": "list-serial-001",
   "context": "list deploy",
   "content": {}
 }
@@ -846,7 +872,7 @@ POST /api/deploy/list
 ```json
 {
   "msg_id": "list-001_Resp",
-  "serial": "serial-001",
+  "serial": "list-serial-001",
   "context": "list deploy",
   "status": 0,
   "http_status_code": 200,
@@ -880,7 +906,7 @@ POST /api/deploy/list
 POST /api/deploy/stop
 ```
 
-当前状态：一期需补齐。前端适配层已预留该接口。
+当前状态：后端已建路由并纳入部署类 envelope 校验，业务能力暂未实现，当前返回 `501`。
 
 优先级：低于 `check-available`、`create-default`、`retrieve`、`list`、`release`、`reset`。
 
@@ -889,7 +915,7 @@ POST /api/deploy/stop
 ```json
 {
   "msg_id": "stop-001",
-  "serial": "serial-001",
+  "serial": "stop-serial-001",
   "context": "stop deploy",
   "content": {
     "name": "nvidia-cuda-xxxxxx"
@@ -901,13 +927,15 @@ POST /api/deploy/stop
 
 ```json
 {
-  "status": 0,
-  "http_status_code": 200,
-  "msg": "OK",
-  "is_success": true,
+  "msg_id": "stop-001_Resp",
+  "serial": "stop-serial-001",
+  "context": "stop deploy",
+  "status": -1,
+  "http_status_code": 501,
+  "msg": "停止部署暂未实现",
+  "is_success": false,
   "content": {
-    "deployment_name": "nvidia-cuda-xxxxxx",
-    "status": "stopped"
+    "deployment_name": "nvidia-cuda-xxxxxx"
   }
 }
 ```
@@ -927,7 +955,7 @@ POST /api/deploy/queue
 ```json
 {
   "msg_id": "queue-001",
-  "serial": "serial-001",
+  "serial": "queue-serial-001",
   "context": "queue deploy",
   "content": {
     "name": "nvidia-cuda-auto-001",
@@ -951,7 +979,7 @@ POST /api/deploy/queue
 }
 ```
 
-说明：只有在重新纳入“一期资源不足排队”范围后再实现。当前资源不足应由 `check-available` 返回 `400` 和明确 reason。
+说明：只有在重新纳入“一期资源不足排队”范围后再实现。当前资源不足应由 `check-available` 返回 `400` 和明确 reason。若后续启用该接口，建议沿用 `queue-` 作为 `msg_id` / `serial` 前缀。
 
 ### 5.10 部署日志
 
@@ -959,7 +987,7 @@ POST /api/deploy/queue
 POST /api/deploy/logs
 ```
 
-当前状态：一期需补齐。前端适配层已预留该接口。
+当前状态：后端已建路由并纳入部署类 envelope 校验，业务能力暂未实现，当前返回 `501`。
 
 优先级：低于核心部署生命周期。可以在 `release/reset` 可用后补齐。
 
@@ -968,7 +996,7 @@ POST /api/deploy/logs
 ```json
 {
   "msg_id": "logs-001",
-  "serial": "serial-001",
+  "serial": "logs-serial-001",
   "context": "deploy logs",
   "content": {
     "name": "nvidia-cuda-xxxxxx"
@@ -980,17 +1008,17 @@ POST /api/deploy/logs
 
 ```json
 {
-  "status": 0,
-  "http_status_code": 200,
-  "msg": "OK",
-  "is_success": true,
-  "content": [
-    {
-      "time": "2026-05-21 15:30:00",
-      "level": "INFO",
-      "message": "Instance started successfully"
-    }
-  ]
+  "msg_id": "logs-001_Resp",
+  "serial": "logs-serial-001",
+  "context": "deploy logs",
+  "status": -1,
+  "http_status_code": 501,
+  "msg": "部署日志暂未实现",
+  "is_success": false,
+  "content": {
+    "deployment_name": "nvidia-cuda-xxxxxx",
+    "lines": []
+  }
 }
 ```
 
@@ -1743,6 +1771,8 @@ type ApiEnvelope<T> = {
 | `content.creator` | 前端或当前用户 | 写入 label/annotation 和本地表 |
 | `gpu_resource_name` | Huawei 兼容字段 | 指定底层 K8s 资源名 |
 
+部署类接口当前会校验 `msg_id` / `serial` 前缀和 `context`，例如查询单个部署必须使用 `retrieve-` 前缀和 `retrieve deploy` 上下文；创建部署必须使用 `create-` 前缀和 `create inference instance` 上下文。前端不要复用其他动作的 envelope。
+
 ### 11.3 端口字段
 
 端口接口统一使用：
@@ -1807,7 +1837,9 @@ POST /api/deploy/create-default
 POST /api/deploy/retrieve
 POST /api/deploy/release
 POST /api/deploy/reset
+POST /api/deploy/stop
 POST /api/deploy/list
+POST /api/deploy/logs
 GET  /api/port-list/list
 POST /api/port-list/add
 PUT  /api/port-list/update/{item_id}
@@ -1843,6 +1875,9 @@ POST /api/users/update
 POST /api/users/delete
 POST /api/users/reset-password
 POST /api/cluster
+POST /api/deploy/check-available
+POST /api/deploy/create-default
+POST /api/deploy/retrieve
 GET  /api/port-list/list
 POST /api/port-list/add
 PUT  /api/port-list/update/{item_id}
@@ -1853,15 +1888,12 @@ GET  /api/port-list/resolve
 部署类下一步优先补齐实现：
 
 ```text
-POST /api/deploy/check-available
-POST /api/deploy/create-default
-POST /api/deploy/retrieve
 POST /api/deploy/list
 POST /api/deploy/release
 POST /api/deploy/reset
 ```
 
-后续增强或暂缓接口：
+后续业务增强或暂缓接口：
 
 ```text
 POST /api/deploy/stop

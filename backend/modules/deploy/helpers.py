@@ -46,6 +46,81 @@ def pod_items(result) -> list:
     return []
 
 
+def service_node_ports(service: dict) -> list[dict]:
+    ports = []
+    spec = service.get("spec", {}) or {}
+    for item in spec.get("ports", []) or []:
+        if not isinstance(item, dict) or item.get("nodePort") is None:
+            continue
+        ports.append({
+            "name": item.get("name"),
+            "port": item.get("nodePort"),
+            "target_port": item.get("targetPort"),
+            "protocol": item.get("protocol"),
+        })
+    return ports
+
+
+def gpu_resource_limits(deployment: dict) -> dict:
+    template_spec = (((deployment.get("spec", {}) or {}).get("template", {}) or {}).get("spec", {}) or {})
+    containers = template_spec.get("containers", []) or []
+    main_container = containers[0] if containers else {}
+    limits = ((main_container.get("resources", {}) or {}).get("limits", {}) or {})
+    nested_resources = limits.get("resources", {}) if isinstance(limits.get("resources"), dict) else {}
+
+    resources = {}
+    for source in (limits, nested_resources):
+        for key, value in source.items():
+            if "/" in str(key) and key not in {"cpu", "memory", "storage", "resources"}:
+                resources[key] = value
+    return resources
+
+
+def summarize_deployment(deployment: dict) -> dict:
+    metadata = deployment.get("metadata", {}) or {}
+    annotations = metadata.get("annotations", {}) or {}
+    labels = metadata.get("labels", {}) or {}
+    spec = deployment.get("spec", {}) or {}
+    status = deployment.get("status", {}) or {}
+    template_spec = ((spec.get("template", {}) or {}).get("spec", {}) or {})
+    containers = template_spec.get("containers", []) or []
+    main_container = containers[0] if containers else {}
+    resources = main_container.get("resources", {}) or {}
+
+    # 查询接口只返回实例中心需要展示的摘要，避免把 PaaS Deployment 原文整包透出。
+    return {
+        "name": metadata.get("name"),
+        "namespace": metadata.get("namespace"),
+        "cluster": metadata.get("cluster"),
+        "uid": metadata.get("uid"),
+        "created_at": annotations.get("createdAt") or metadata.get("creationTimestamp"),
+        "creator": labels.get("creator"),
+        "creator_ip": annotations.get("creatorIp"),
+        "deployType": annotations.get("deployType"),
+        "workshop_mode": annotations.get("workshopMode") == "true",
+        "image": main_container.get("image"),
+        "replicas": status.get("replicas", 0),
+        "ready_replicas": status.get("readyReplicas", 0),
+        "available_replicas": status.get("availableReplicas", 0),
+        "state": status.get("state"),
+        "conditions": [
+            {
+                "type": item.get("type"),
+                "status": item.get("status"),
+                "reason": item.get("reason"),
+                "message": item.get("message"),
+            }
+            for item in status.get("conditions", []) or []
+            if isinstance(item, dict)
+        ],
+        "resources": {
+            "limits": resources.get("limits", {}),
+            "requests": resources.get("requests", {}),
+        },
+        "gpu_resources": gpu_resource_limits(deployment),
+    }
+
+
 def _container_state(container_status: dict) -> str | None:
     state = container_status.get("state") or {}
     if isinstance(state, dict) and state:
@@ -80,6 +155,7 @@ def summarize_pod(pod: dict) -> dict:
         "phase": status_obj.get("phase"),
         "node_name": spec_obj.get("nodeName"),
         "pod_ip": status_obj.get("podIP"),
+        "host_ip": status_obj.get("hostIP"),
         "ip": status_obj.get("podIP"),
         "restart_count": restart_count,
         "ready": ready,

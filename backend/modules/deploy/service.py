@@ -11,8 +11,11 @@ from flask import g, request
 from .helpers import (
     deployment_items as _deployment_items,
     deployment_pod_path,
+    gpu_resource_limits,
     pod_items,
     response_envelope as _response_envelope,
+    service_node_ports,
+    summarize_deployment,
     summarize_pod,
     summarize_pods,
 )
@@ -863,13 +866,19 @@ def retrieve(payload: dict) -> tuple[dict, int]:
                 -1,
             ), deployment_status
 
+        service_path = f"/clusters/{Config.DCE_CLUSTER}/namespaces/{Config.DCE_NAMESPACE}/services/{name}"
+        service_status, service_result = client.request_with_status("GET", service_path)
+        node_ports = service_node_ports(service_result) if service_status == 200 and isinstance(service_result, dict) else []
+
         # 旧脚本使用 app=<deployment_name> 关联 Pod；创建接口也写入同名 app label。
         pod_path = deployment_pod_path(Config.DCE_CLUSTER, Config.DCE_NAMESPACE, name)
         pod_status, pod_result = client.request_with_status("GET", pod_path)
         pods = []
+        deployment = summarize_deployment(deployment_result)
         content = {
             "deployment_name": name,
-            "deployment": deployment_result,
+            "deployment": deployment,
+            "node_ports": node_ports,
             "pods": pods,
             "summary": summarize_pods(pods),
         }
@@ -883,6 +892,22 @@ def retrieve(payload: dict) -> tuple[dict, int]:
                 "http_status_code": pod_status,
                 "response": pod_result,
             }
+
+        first_pod = pods[0] if pods else {}
+        gpu_resources = gpu_resource_limits(deployment_result)
+        gpu_text = " / ".join(f"{key} x{value}" for key, value in gpu_resources.items()) or "GPU x0"
+        open_ports = [item.get("port") for item in node_ports if item.get("port") is not None]
+        # detail 只承载前端展开卡片字段，不写数据库。
+        content["detail"] = {
+            "creator": deployment.get("creator"),
+            "created_at": deployment.get("created_at"),
+            "deploy_area": first_pod.get("node_name"),
+            "replica_count": f"{content['summary']['ready_pods']}/{deployment.get('replicas', 0)} 个",
+            "service_endpoint": first_pod.get("host_ip"),
+            "open_ports": open_ports,
+            "resource_mode": "物理 GPU",
+            "bound_resource": f"{first_pod.get('node_name') or '-'} / {gpu_text}",
+        }
 
         return _response_envelope(payload, content, 200, "OK", 0), 200
     except Exception as exc:

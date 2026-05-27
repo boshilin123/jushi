@@ -23,9 +23,10 @@ def create_default():
 
 @deploy_bp.post("/retrieve")
 def retrieve():
-    # 查询单个部署详情：后续合并 Deployment 详情和 Pod 状态，供实例中心查看。
+    # 查询单个部署详情：合并 PaaS Deployment 详情和 Pod 状态，供实例中心查看。
     payload = request.get_json(silent=True) or {}
-    return jsonify(service.retrieve(payload))
+    result, status_code = service.retrieve(payload)
+    return jsonify(result), status_code
 
 
 @deploy_bp.post("/release")

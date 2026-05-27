@@ -8,6 +8,14 @@ import uuid
 
 from flask import g, request
 
+from .helpers import (
+    deployment_items as _deployment_items,
+    deployment_pod_path,
+    pod_items,
+    response_envelope as _response_envelope,
+    summarize_pod,
+    summarize_pods,
+)
 from . import repository
 from .model import build_deploy_record
 from .schema import get_deploy_name, validate_create_payload
@@ -61,33 +69,6 @@ GPU_DEVICE_MAP = {
         "vendor": "Huawei",
     },
 }
-
-
-def _envelope_field(payload: dict, key: str, default: str = "") -> str:
-    return str(payload.get(key) or default)
-
-
-def _response_envelope(
-    payload: dict,
-    content: dict,
-    http_status_code: int = 200,
-    msg: str = "OK",
-    status: int = 0,
-) -> dict:
-    # 部署类接口沿用旧服务 envelope，方便前端和历史脚本按 msg_id/serial/context 追踪链路。
-    return {
-        "msg_id": f"{_envelope_field(payload, 'msg_id')}_Resp",
-        "head_id": 0,
-        "context": _envelope_field(payload, "context"),
-        "serial": _envelope_field(payload, "serial"),
-        "version": "1.0.0.1",
-        "status": status,
-        "content": content,
-        "token": "",
-        "http_status_code": http_status_code,
-        "msg": msg,
-        "is_success": 200 <= http_status_code < 300,
-    }
 
 
 def _failed_check(key: str, label: str, display: str, message: str, detail=None) -> dict:
@@ -190,13 +171,6 @@ def _extract_device_request(payload: dict) -> tuple[dict | None, str | None]:
         "requested": requested_count,
         **profile,
     }, None
-
-
-def _deployment_items(result) -> list:
-    # PaaS 列表接口通常把资源放在 items 中；异常结构按空列表处理，避免后续遍历报错。
-    if isinstance(result, dict) and isinstance(result.get("items"), list):
-        return result["items"]
-    return []
 
 
 def _existing_node_ports(services_result) -> set[int]:
@@ -854,10 +828,66 @@ def create_default(payload: dict) -> tuple[dict, int]:
         return _response_envelope(payload, {"error": str(exc)}, 500, msg, -1), 500
 
 
-def retrieve(payload: dict) -> dict:
-    # TODO: 调用 PaaS 查询 Deployment，再按 app/name label 查询 Pod 状态并合并返回。
+def retrieve(payload: dict) -> tuple[dict, int]:
     name = get_deploy_name(payload)
-    return {"deployment_name": name, "deployment": None, "pods": [], "summary": {}}
+    if not name:
+        msg = "缺少必填字段：content.name"
+        return _response_envelope(payload, {"error": msg}, 400, msg, -1), 400
+    if not Config.DCE_API_BASE:
+        msg = "PaaS 地址未配置"
+        return _response_envelope(payload, {"error": "DCE_API_BASE is not configured"}, 500, msg, -1), 500
+    if not Config.DCE_TOKEN:
+        msg = "PaaS token 未配置"
+        return _response_envelope(payload, {"error": "DCE_TOKEN is not configured"}, 500, msg, -1), 500
+
+    try:
+        client = PaasClient(Config.DCE_API_BASE, Config.DCE_TOKEN)
+        deployment_path = f"/clusters/{Config.DCE_CLUSTER}/namespaces/{Config.DCE_NAMESPACE}/deployments/{name}"
+        deployment_status, deployment_result = client.request_with_status("GET", deployment_path)
+        if deployment_status == 404:
+            msg = f"部署 {name} 不存在"
+            return _response_envelope(
+                payload,
+                {"deployment_name": name, "response": deployment_result},
+                404,
+                msg,
+                -1,
+            ), 404
+        if not 200 <= deployment_status < 300:
+            msg = "部署查询超时" if deployment_status == 504 else "部署查询失败"
+            return _response_envelope(
+                payload,
+                {"deployment_name": name, "response": deployment_result},
+                deployment_status,
+                msg,
+                -1,
+            ), deployment_status
+
+        # 旧脚本使用 app=<deployment_name> 关联 Pod；创建接口也写入同名 app label。
+        pod_path = deployment_pod_path(Config.DCE_CLUSTER, Config.DCE_NAMESPACE, name)
+        pod_status, pod_result = client.request_with_status("GET", pod_path)
+        pods = []
+        content = {
+            "deployment_name": name,
+            "deployment": deployment_result,
+            "pods": pods,
+            "summary": summarize_pods(pods),
+        }
+        if pod_status == 200:
+            pods = [summarize_pod(pod) for pod in pod_items(pod_result) if isinstance(pod, dict)]
+            content["pods"] = pods
+            content["summary"] = summarize_pods(pods)
+        else:
+            # Deployment 已查到时不因 Pod 列表失败中断详情页，只把失败原因放进响应供排查。
+            content["pod_query_error"] = {
+                "http_status_code": pod_status,
+                "response": pod_result,
+            }
+
+        return _response_envelope(payload, content, 200, "OK", 0), 200
+    except Exception as exc:
+        msg = "部署查询异常"
+        return _response_envelope(payload, {"deployment_name": name, "error": str(exc)}, 500, msg, -1), 500
 
 
 def release(payload: dict) -> dict:

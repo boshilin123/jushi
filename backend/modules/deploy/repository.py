@@ -1,5 +1,6 @@
 import json
 from contextlib import contextmanager
+from datetime import datetime
 
 try:
     from backend.db.mysql import get_connection
@@ -80,9 +81,35 @@ def save_deploy_instance(record: dict):
     return record
 
 
+def _format_datetime(value):
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+    return value
+
+
 def list_deploy_instances():
-    # 查询部署实例列表，后续优先从 deploy_instance 表读取并补充实时状态。
-    return []
+    # 查询本系统创建记录，只提供业务侧别名；实时状态仍以 PaaS Deployment 为准。
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SHOW COLUMNS FROM deploy_instance LIKE 'instance_name'")
+            has_instance_name = cursor.fetchone() is not None
+            instance_expr = "instance_name" if has_instance_name else "deployment_name AS instance_name"
+            cursor.execute(
+                f"""
+                SELECT
+                    {instance_expr},
+                    deployment_name,
+                    status,
+                    created_at
+                FROM deploy_instance
+                ORDER BY created_at DESC
+                """
+            )
+            rows = cursor.fetchall() or []
+
+    for row in rows:
+        row["created_at"] = _format_datetime(row.get("created_at"))
+    return rows
 
 
 def update_deploy_status(name: str, status: str):

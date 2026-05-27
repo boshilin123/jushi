@@ -854,7 +854,7 @@ POST /api/deploy/reset
 POST /api/deploy/list
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已实现，返回实例列表页需要的精简字段。
 
 请求：
 
@@ -881,13 +881,10 @@ POST /api/deploy/list
   "content": {
     "items": [
       {
+        "instance_name": "qwen2.5-72b-prod",
         "deployment_name": "nvidia-cuda-xxxxxx",
-        "gpu_type": "NVIDIA/GPU",
-        "gpu_count": 1,
-        "deployType": "NvidiaInfer",
-        "creator": "admin",
-        "status": "running",
-        "created_at": "2026-05-21 15:30:00"
+        "status": "已部署",
+        "created_at": "2026-05-25 14:31:00"
       }
     ]
   }
@@ -896,9 +893,10 @@ POST /api/deploy/list
 
 实现要求：
 
-- 第一期可以先返回 PaaS Deployment 列表的整理结果。
-- 如果 `deploy_instance` 中有本系统创建记录，应合并创建人、端口、日志路径和本地状态。
-- 后续需要“只看我的实例”时，可以按 `creator` label 或本地表筛选。
+- `instance_name`：实例展示名称，优先取本地 `deploy_instance.instance_name`；没有本地记录时回退为 `deployment_name`。
+- `deployment_name`：真实 Kubernetes Deployment 名称，也就是工作负载 ID。
+- `status`：由 PaaS Deployment 实时状态转换，Running/Available 显示为 `已部署`，其他状态显示为 `异常`。
+- `created_at`：优先取 PaaS Deployment 注解或元数据创建时间，必要时回退本地记录创建时间。
 
 ### 5.8 停止部署
 

@@ -962,10 +962,79 @@ def logs(payload: dict) -> dict:
     return _response_envelope(payload, {"deployment_name": name, "lines": []}, 501, "部署日志暂未实现", -1)
 
 
+def _format_list_created_at(value) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text.isdigit():
+        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(int(text)))
+    return text.replace("T", " ").replace("Z", "")[:19]
+
+
+def _deployment_display_status(deployment: dict) -> str:
+    replicas = _parse_int_quantity(deployment.get("replicas"))
+    available = _parse_int_quantity(deployment.get("available_replicas"))
+    ready = _parse_int_quantity(deployment.get("ready_replicas"))
+    state = str(deployment.get("state") or "").lower()
+    has_available_condition = any(
+        item.get("type") == "Available" and item.get("status") == "True"
+        for item in deployment.get("conditions", []) or []
+    )
+
+    if state == "running" or has_available_condition or (replicas > 0 and available >= replicas and ready >= replicas):
+        return "已部署"
+    return "异常"
+
+
 def list_deployments(payload: dict) -> dict:
     valid, message = validate_deploy_envelope(payload, "list")
     if not valid:
         return _response_envelope(payload, {"error": message}, 400, message, -1)
 
-    # TODO: 查询 PaaS deployments 列表，并和 deploy_instance 表中的创建人、端口、日志路径合并。
-    return {"items": repository.list_deploy_instances()}
+    if not Config.DCE_API_BASE:
+        msg = "PaaS 地址未配置"
+        return _response_envelope(payload, {"error": "DCE_API_BASE is not configured"}, 500, msg, -1)
+    if not Config.DCE_TOKEN:
+        msg = "PaaS token 未配置"
+        return _response_envelope(payload, {"error": "DCE_TOKEN is not configured"}, 500, msg, -1)
+
+    try:
+        client = PaasClient(Config.DCE_API_BASE, Config.DCE_TOKEN)
+        deployment_path = f"/clusters/{Config.DCE_CLUSTER}/namespaces/{Config.DCE_NAMESPACE}/deployments"
+        deploy_status, deploy_result = client.request_with_status("GET", deployment_path)
+        if not 200 <= deploy_status < 300:
+            msg = "部署列表查询超时" if deploy_status == 504 else "部署列表查询失败"
+            return _response_envelope(
+                payload,
+                {"response": deploy_result},
+                deploy_status,
+                msg,
+                -1,
+            )
+
+        records = {
+            row.get("deployment_name"): row
+            for row in repository.list_deploy_instances()
+            if row.get("deployment_name")
+        }
+        items = []
+        for raw_deployment in _deployment_items(deploy_result):
+            if not isinstance(raw_deployment, dict):
+                continue
+            deployment = summarize_deployment(raw_deployment)
+            deployment_name = deployment.get("name")
+            if not deployment_name:
+                continue
+            record = records.get(deployment_name, {})
+            items.append({
+                "instance_name": record.get("instance_name") or deployment_name,
+                "deployment_name": deployment_name,
+                "status": _deployment_display_status(deployment),
+                "created_at": _format_list_created_at(deployment.get("created_at") or record.get("created_at")),
+            })
+
+        items.sort(key=lambda item: item.get("created_at") or "", reverse=True)
+        return _response_envelope(payload, {"items": items}, 200, "OK", 0)
+    except Exception as exc:
+        msg = "部署列表查询异常"
+        return _response_envelope(payload, {"error": str(exc)}, 500, msg, -1)

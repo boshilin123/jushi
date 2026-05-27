@@ -144,6 +144,42 @@ COMPONENTS = {
                 }
             },
         },
+        "DeployCheckEnvelope": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/DeployEnvelope"},
+                    "example": {
+                        "msg_id": "check-001",
+                        "serial": "check-serial-001",
+                        "context": "check deploy available",
+                        "content": {
+                            "devices": {"NVIDIA/GPU": 1},
+                            "deployType": "NvidiaInfer",
+                            "creator": "admin",
+                        },
+                    },
+                }
+            },
+        },
+        "DeployCreateEnvelope": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/DeployEnvelope"},
+                    "example": {
+                        "msg_id": "create-001",
+                        "serial": "create-serial-001",
+                        "context": "create inference instance",
+                        "content": {
+                            "devices": {"NVIDIA/GPU": 1},
+                            "deployType": "NvidiaInfer",
+                            "creator": "admin",
+                        },
+                    },
+                }
+            },
+        },
         "NameEnvelope": {
             "required": True,
             "content": {
@@ -151,9 +187,79 @@ COMPONENTS = {
                     "schema": {"$ref": "#/components/schemas/NameEnvelope"},
                     "example": {
                         "msg_id": "retrieve-001",
-                        "serial": "serial-001",
+                        "serial": "retrieve-serial-001",
                         "context": "retrieve deploy",
                         "content": {"name": "nvidia-cuda-xxxxxx"},
+                    },
+                }
+            },
+        },
+        "DeployReleaseEnvelope": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/NameEnvelope"},
+                    "example": {
+                        "msg_id": "release-001",
+                        "serial": "release-serial-001",
+                        "context": "release deploy",
+                        "content": {"name": "nvidia-cuda-xxxxxx"},
+                    },
+                }
+            },
+        },
+        "DeployResetEnvelope": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/NameEnvelope"},
+                    "example": {
+                        "msg_id": "reset-001",
+                        "serial": "reset-serial-001",
+                        "context": "restart deploy",
+                        "content": {"name": "nvidia-cuda-xxxxxx"},
+                    },
+                }
+            },
+        },
+        "DeployStopEnvelope": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/NameEnvelope"},
+                    "example": {
+                        "msg_id": "stop-001",
+                        "serial": "stop-serial-001",
+                        "context": "stop deploy",
+                        "content": {"name": "nvidia-cuda-xxxxxx"},
+                    },
+                }
+            },
+        },
+        "DeployLogsEnvelope": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/NameEnvelope"},
+                    "example": {
+                        "msg_id": "logs-001",
+                        "serial": "logs-serial-001",
+                        "context": "deploy logs",
+                        "content": {"name": "nvidia-cuda-xxxxxx"},
+                    },
+                }
+            },
+        },
+        "DeployListEnvelope": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/ClusterEnvelope"},
+                    "example": {
+                        "msg_id": "list-001",
+                        "serial": "list-serial-001",
+                        "context": "list deploy",
+                        "content": {},
                     },
                 }
             },
@@ -325,7 +431,7 @@ COMPONENTS = {
             "type": "object",
             "properties": {
                 "msg_id": {"type": "string", "example": "retrieve-001"},
-                "serial": {"type": "string", "example": "serial-001"},
+                "serial": {"type": "string", "example": "retrieve-serial-001"},
                 "context": {"type": "string", "example": "retrieve deploy"},
                 "content": {
                     "type": "object",

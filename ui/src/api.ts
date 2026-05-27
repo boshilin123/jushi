@@ -117,6 +117,30 @@ export type LogLine = {
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
 
+const DEPLOY_ACTION_META = {
+  check: { prefix: "check", context: "check deploy available" },
+  create: { prefix: "create", context: "create inference instance" },
+  retrieve: { prefix: "retrieve", context: "retrieve deploy" },
+  list: { prefix: "list", context: "list deploy" },
+  release: { prefix: "release", context: "release deploy" },
+  reset: { prefix: "reset", context: "restart deploy" },
+  stop: { prefix: "stop", context: "stop deploy" },
+  logs: { prefix: "logs", context: "deploy logs" },
+} as const;
+
+type DeployAction = keyof typeof DEPLOY_ACTION_META;
+
+function withDeployActionEnvelope<T>(payload: ApiEnvelope<T>, action: DeployAction): ApiEnvelope<T> {
+  const meta = DEPLOY_ACTION_META[action];
+  const now = Date.now();
+  return {
+    ...payload,
+    msg_id: payload.msg_id?.startsWith(`${meta.prefix}-`) ? payload.msg_id : `${meta.prefix}-${now}`,
+    serial: payload.serial?.startsWith(`${meta.prefix}-`) ? payload.serial : `${meta.prefix}-serial-${now}`,
+    context: meta.context,
+  };
+}
+
 function resourceToDeployType(resourceName: DeployResourceName): DeployType {
   return resourceName === "Huawei/Ascend310P" ? "HuaweiInfer" : "NvidiaInfer";
 }
@@ -167,27 +191,27 @@ async function requestApi<TResponse, TBody>(path: string, body: TBody, user = "a
 }
 
 export function checkDeployAvailable(payload: ApiEnvelope<CreateDeployContent>) {
-  return requestApi<DeployPrecheckResult, ApiEnvelope<CreateDeployContent>>("/api/deploy/check-available", payload, payload.content.creator);
+  return requestApi<DeployPrecheckResult, ApiEnvelope<CreateDeployContent>>("/api/deploy/check-available", withDeployActionEnvelope(payload, "check"), payload.content.creator);
 }
 
 export function createDeploy(payload: ApiEnvelope<CreateDeployContent>) {
-  return requestApi<CreateDeployResult, ApiEnvelope<CreateDeployContent>>("/api/deploy/create-default", payload, payload.content.creator);
+  return requestApi<CreateDeployResult, ApiEnvelope<CreateDeployContent>>("/api/deploy/create-default", withDeployActionEnvelope(payload, "create"), payload.content.creator);
 }
 
 export function retrieveDeploy(payload: ApiEnvelope<DeployNamePayload>) {
-  return requestApi<unknown, ApiEnvelope<DeployNamePayload>>("/api/deploy/retrieve", payload);
+  return requestApi<unknown, ApiEnvelope<DeployNamePayload>>("/api/deploy/retrieve", withDeployActionEnvelope(payload, "retrieve"));
 }
 
 export function releaseDeploy(payload: ApiEnvelope<DeployNamePayload>) {
-  return requestApi<unknown, ApiEnvelope<DeployNamePayload>>("/api/deploy/release", payload);
+  return requestApi<unknown, ApiEnvelope<DeployNamePayload>>("/api/deploy/release", withDeployActionEnvelope(payload, "release"));
 }
 
 export function resetDeploy(payload: ApiEnvelope<DeployNamePayload>) {
-  return requestApi<unknown, ApiEnvelope<DeployNamePayload>>("/api/deploy/reset", payload);
+  return requestApi<unknown, ApiEnvelope<DeployNamePayload>>("/api/deploy/reset", withDeployActionEnvelope(payload, "reset"));
 }
 
 export function stopDeploy(payload: ApiEnvelope<DeployNamePayload>) {
-  return requestApi<unknown, ApiEnvelope<DeployNamePayload>>("/api/deploy/stop", payload);
+  return requestApi<unknown, ApiEnvelope<DeployNamePayload>>("/api/deploy/stop", withDeployActionEnvelope(payload, "stop"));
 }
 
 export function queueDeploy(payload: ApiEnvelope<QueueDeployPayload>) {
@@ -195,11 +219,11 @@ export function queueDeploy(payload: ApiEnvelope<QueueDeployPayload>) {
 }
 
 export function listDeployments(payload: Omit<ApiEnvelope<Record<string, never>>, "content"> & { content?: Record<string, never> }) {
-  return requestApi<unknown, ApiEnvelope<Record<string, never>>>("/api/deploy/list", { ...payload, content: payload.content || {} });
+  return requestApi<unknown, ApiEnvelope<Record<string, never>>>("/api/deploy/list", withDeployActionEnvelope({ ...payload, content: payload.content || {} }, "list"));
 }
 
 export function getDeployLogs(payload: ApiEnvelope<DeployNamePayload>) {
-  return requestApi<LogLine[], ApiEnvelope<DeployNamePayload>>("/api/deploy/logs", payload);
+  return requestApi<LogLine[], ApiEnvelope<DeployNamePayload>>("/api/deploy/logs", withDeployActionEnvelope(payload, "logs"));
 }
 
 export function listPortAllowlist(payload: ApiEnvelope<Record<string, never>>) {

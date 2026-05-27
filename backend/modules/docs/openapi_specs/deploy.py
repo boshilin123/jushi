@@ -3,7 +3,7 @@ DEPLOY_PATHS = {
         "post": {
             "tags": ["Deploy"],
             "summary": "资源预检",
-            "requestBody": {"$ref": "#/components/requestBodies/DeployEnvelope"},
+            "requestBody": {"$ref": "#/components/requestBodies/DeployCheckEnvelope"},
             "responses": {"200": {"description": "资源可创建"}},
         }
     },
@@ -11,7 +11,7 @@ DEPLOY_PATHS = {
         "post": {
             "tags": ["Deploy"],
             "summary": "创建推理部署",
-            "requestBody": {"$ref": "#/components/requestBodies/DeployEnvelope"},
+            "requestBody": {"$ref": "#/components/requestBodies/DeployCreateEnvelope"},
             "responses": {"200": {"description": "创建成功"}},
         }
     },
@@ -27,7 +27,7 @@ DEPLOY_PATHS = {
         "post": {
             "tags": ["Deploy"],
             "summary": "释放部署",
-            "requestBody": {"$ref": "#/components/requestBodies/NameEnvelope"},
+            "requestBody": {"$ref": "#/components/requestBodies/DeployReleaseEnvelope"},
             "responses": {"200": {"description": "释放结果"}},
         }
     },
@@ -35,14 +35,31 @@ DEPLOY_PATHS = {
         "post": {
             "tags": ["Deploy"],
             "summary": "重启部署",
-            "requestBody": {"$ref": "#/components/requestBodies/NameEnvelope"},
+            "requestBody": {"$ref": "#/components/requestBodies/DeployResetEnvelope"},
             "responses": {"200": {"description": "重启结果"}},
+        }
+    },
+    "/api/deploy/stop": {
+        "post": {
+            "tags": ["Deploy"],
+            "summary": "停止部署",
+            "requestBody": {"$ref": "#/components/requestBodies/DeployStopEnvelope"},
+            "responses": {"501": {"description": "暂未实现"}},
+        }
+    },
+    "/api/deploy/logs": {
+        "post": {
+            "tags": ["Deploy"],
+            "summary": "部署日志",
+            "requestBody": {"$ref": "#/components/requestBodies/DeployLogsEnvelope"},
+            "responses": {"501": {"description": "暂未实现"}},
         }
     },
     "/api/deploy/list": {
         "post": {
             "tags": ["Deploy"],
             "summary": "部署列表",
+            "requestBody": {"$ref": "#/components/requestBodies/DeployListEnvelope"},
             "responses": {"200": {"description": "部署列表"}},
         }
     },

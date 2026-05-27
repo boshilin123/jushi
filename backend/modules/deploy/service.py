@@ -21,7 +21,7 @@ from .helpers import (
 )
 from . import repository
 from .model import build_deploy_record
-from .schema import get_deploy_name, validate_create_payload
+from .schema import get_deploy_name, validate_create_payload, validate_deploy_envelope
 
 try:
     from backend.config import Config
@@ -235,7 +235,7 @@ def _is_workshop_request(client_ip: str) -> bool:
 
 
 def _precheck_passed(payload: dict, *, ignore_nodeport: bool = False) -> tuple[bool, dict, int]:
-    result = check_available(payload)
+    result = check_available(payload, validate_envelope=False)
     content = result.get("content", {}) if isinstance(result, dict) else {}
     failed_checks = [
         check for check in content.get("checks", []) or []
@@ -445,7 +445,12 @@ def _rollback_created_resources(client: PaasClient, name: str, *, service_create
     client.request_with_status("DELETE", deploy_path)
 
 
-def check_available(payload: dict) -> dict:
+def check_available(payload: dict, *, validate_envelope: bool = True) -> dict:
+    if validate_envelope:
+        valid, message = validate_deploy_envelope(payload, "check")
+        if not valid:
+            return _response_envelope(payload, {"error": message}, 400, message, -1)
+
     # 资源预检只判断“当前配置是否具备创建条件”，不会创建 Deployment、Service 或占用端口。
     device_request, error = _extract_device_request(payload)
     if error:
@@ -679,6 +684,10 @@ def check_available(payload: dict) -> dict:
 
 
 def create_default(payload: dict) -> tuple[dict, int]:
+    valid, message = validate_deploy_envelope(payload, "create")
+    if not valid:
+        return _response_envelope(payload, {"error": message}, 400, message, -1), 400
+
     valid, message = validate_create_payload(payload)
     if not valid:
         return _response_envelope(payload, {"error": message}, 400, message, -1), 400
@@ -832,6 +841,10 @@ def create_default(payload: dict) -> tuple[dict, int]:
 
 
 def retrieve(payload: dict) -> tuple[dict, int]:
+    valid, message = validate_deploy_envelope(payload, "retrieve")
+    if not valid:
+        return _response_envelope(payload, {"error": message}, 400, message, -1), 400
+
     name = get_deploy_name(payload)
     if not name:
         msg = "缺少必填字段：content.name"
@@ -875,35 +888,26 @@ def retrieve(payload: dict) -> tuple[dict, int]:
         pod_status, pod_result = client.request_with_status("GET", pod_path)
         pods = []
         deployment = summarize_deployment(deployment_result)
-        content = {
-            "deployment_name": name,
-            "deployment": deployment,
-            "node_ports": node_ports,
-            "pods": pods,
-            "summary": summarize_pods(pods),
-        }
-        if pod_status == 200:
-            pods = [summarize_pod(pod) for pod in pod_items(pod_result) if isinstance(pod, dict)]
-            content["pods"] = pods
-            content["summary"] = summarize_pods(pods)
-        else:
-            # Deployment 已查到时不因 Pod 列表失败中断详情页，只把失败原因放进响应供排查。
-            content["pod_query_error"] = {
-                "http_status_code": pod_status,
-                "response": pod_result,
-            }
-
-        first_pod = pods[0] if pods else {}
+        summary = summarize_pods(pods)
+        first_pod = {}
         gpu_resources = gpu_resource_limits(deployment_result)
         gpu_text = " / ".join(f"{key} x{value}" for key, value in gpu_resources.items()) or "GPU x0"
         open_ports = [item.get("port") for item in node_ports if item.get("port") is not None]
-        # detail 只承载前端展开卡片字段，不写数据库。
-        content["detail"] = {
+        if pod_status == 200:
+            pods = [summarize_pod(pod) for pod in pod_items(pod_result) if isinstance(pod, dict)]
+            summary = summarize_pods(pods)
+            first_pod = pods[0] if pods else {}
+
+        # 查询详情只返回前端展示字段，不透传 PaaS 原始对象，也不写数据库。
+        content = {
+            "instance_name": name,
+            "workload_id": name,
+            "status": deployment.get("state") or first_pod.get("phase"),
             "creator": deployment.get("creator"),
             "created_at": deployment.get("created_at"),
             "deploy_area": first_pod.get("node_name"),
-            "replica_count": f"{content['summary']['ready_pods']}/{deployment.get('replicas', 0)} 个",
-            "service_endpoint": first_pod.get("host_ip"),
+            "replica_count": f"{summary['ready_pods']}/{deployment.get('replicas', 0)} 个",
+            "service_endpoint": deployment.get("creator_ip"),
             "open_ports": open_ports,
             "resource_mode": "物理 GPU",
             "bound_resource": f"{first_pod.get('node_name') or '-'} / {gpu_text}",
@@ -916,17 +920,53 @@ def retrieve(payload: dict) -> tuple[dict, int]:
 
 
 def release(payload: dict) -> dict:
+    valid, message = validate_deploy_envelope(payload, "release")
+    if not valid:
+        return _response_envelope(payload, {"error": message}, 400, message, -1)
+
     # TODO: 调用 PaaS 删除 Deployment 和 Service；车间模式没有 Service 时允许 404。
     name = get_deploy_name(payload)
     return repository.update_deploy_status(name, "released")
 
 
 def reset(payload: dict) -> dict:
+    valid, message = validate_deploy_envelope(payload, "reset")
+    if not valid:
+        return _response_envelope(payload, {"error": message}, 400, message, -1)
+
     # TODO: 调用 PaaS/Kubernetes restart 能力，保持和旧脚本 /restart 路径一致。
     name = get_deploy_name(payload)
     return {"deployment_name": name, "is_success": True}
 
 
-def list_deployments() -> dict:
+def stop(payload: dict) -> dict:
+    valid, message = validate_deploy_envelope(payload, "stop")
+    if not valid:
+        return _response_envelope(payload, {"error": message}, 400, message, -1)
+
+    name = get_deploy_name(payload)
+    if not name:
+        msg = "缺少必填字段：content.name"
+        return _response_envelope(payload, {"error": msg}, 400, msg, -1)
+    return _response_envelope(payload, {"deployment_name": name}, 501, "停止部署暂未实现", -1)
+
+
+def logs(payload: dict) -> dict:
+    valid, message = validate_deploy_envelope(payload, "logs")
+    if not valid:
+        return _response_envelope(payload, {"error": message}, 400, message, -1)
+
+    name = get_deploy_name(payload)
+    if not name:
+        msg = "缺少必填字段：content.name"
+        return _response_envelope(payload, {"error": msg}, 400, msg, -1)
+    return _response_envelope(payload, {"deployment_name": name, "lines": []}, 501, "部署日志暂未实现", -1)
+
+
+def list_deployments(payload: dict) -> dict:
+    valid, message = validate_deploy_envelope(payload, "list")
+    if not valid:
+        return _response_envelope(payload, {"error": message}, 400, message, -1)
+
     # TODO: 查询 PaaS deployments 列表，并和 deploy_instance 表中的创建人、端口、日志路径合并。
     return {"items": repository.list_deploy_instances()}

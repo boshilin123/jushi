@@ -10,7 +10,8 @@ deploy_bp = Blueprint("deploy", __name__)
 def check_available():
     # 资源预检接口：后续迁移 app_x86_195.py/app_arm_195.py 中的 GPU 余量、CPU/内存和端口避让检查。
     payload = request.get_json(silent=True) or {}
-    return jsonify(service.check_available(payload))
+    result = service.check_available(payload)
+    return jsonify(result), result.get("http_status_code", 200)
 
 
 @deploy_bp.post("/create-default")
@@ -33,17 +34,37 @@ def retrieve():
 def release():
     # 释放部署资源：后续删除 PaaS Deployment 和 Service，并更新实例状态。
     payload = request.get_json(silent=True) or {}
-    return jsonify(service.release(payload))
+    result = service.release(payload)
+    return jsonify(result), result.get("http_status_code", 200)
 
 
 @deploy_bp.post("/reset")
 def reset():
     # 重启部署实例：后续复用 PaaS/Kubernetes restart 能力。
     payload = request.get_json(silent=True) or {}
-    return jsonify(service.reset(payload))
+    result = service.reset(payload)
+    return jsonify(result), result.get("http_status_code", 200)
+
+
+@deploy_bp.post("/stop")
+def stop():
+    # 停止部署语义待确认，先统一 envelope 校验，避免前端绕过部署类流水规则。
+    payload = request.get_json(silent=True) or {}
+    result = service.stop(payload)
+    return jsonify(result), result.get("http_status_code", 200)
+
+
+@deploy_bp.post("/logs")
+def logs():
+    # 部署日志读取待实现，先统一 envelope 校验。
+    payload = request.get_json(silent=True) or {}
+    result = service.logs(payload)
+    return jsonify(result), result.get("http_status_code", 200)
 
 
 @deploy_bp.post("/list")
 def list_deployments():
     # 查询部署列表，实例中心页面会优先使用这个接口。
-    return jsonify(service.list_deployments())
+    payload = request.get_json(silent=True) or {}
+    result = service.list_deployments(payload)
+    return jsonify(result), result.get("http_status_code", 200)

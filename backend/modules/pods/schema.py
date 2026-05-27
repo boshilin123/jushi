@@ -1,11 +1,16 @@
 def normalize_pod_query(args) -> dict:
-    # 规范 Pod 查询参数，后续支持 namespace、deployment_name、phase、node_name。
-    return {key: args.get(key) for key in args.keys()}
+    return {
+        "namespace": args.get("namespace", "algorithm"),
+        "deployment_name": args.get("deployment_name"),
+        "phase": args.get("phase"),
+        "node_name": args.get("node_name"),
+        "pod_name": args.get("pod_name"),
+        "tail_lines": int(args.get("tail_lines", 200)),
+    }
 
 
 def normalize_pod_action(payload: dict) -> dict:
-    # 规范 Pod 操作参数，至少需要 namespace 和 pod_name。
     return {
-        "namespace": payload.get("namespace"),
-        "pod_name": payload.get("pod_name"),
+        "namespace": payload.get("namespace", "algorithm"),
+        "pod_name": payload.get("pod_name", ""),
     }

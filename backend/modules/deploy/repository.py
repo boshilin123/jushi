@@ -35,8 +35,16 @@ def deploy_create_lock(timeout_seconds: int = 10):
 def save_deploy_instance(record: dict):
     # 保存部署实例记录，创建成功后写入 deploy_instance 表。
     node_ports = record.get("node_ports")
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SHOW COLUMNS FROM deploy_instance LIKE 'instance_name'")
+            has_instance_name = cursor.fetchone() is not None
+
+    instance_columns = "instance_name,\n            " if has_instance_name else ""
+    instance_values = "%s, " if has_instance_name else ""
     sql = """
         INSERT INTO deploy_instance (
+            {instance_columns}
             deployment_name,
             gpu_vendor,
             gpu_type,
@@ -47,24 +55,27 @@ def save_deploy_instance(record: dict):
             node_ports,
             log_path
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-    """
+        VALUES ({instance_values}%s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """.format(instance_columns=instance_columns, instance_values=instance_values)
+    params = []
+    if has_instance_name:
+        params.append(record.get("instance_name"))
+    params.extend(
+        [
+            record["deployment_name"],
+            record["gpu_vendor"],
+            record["gpu_type"],
+            record["gpu_count"],
+            record["deploy_type"],
+            record["creator"],
+            record.get("status", "running"),
+            json.dumps(node_ports, ensure_ascii=False) if node_ports is not None else None,
+            record.get("log_path"),
+        ]
+    )
     with get_connection() as conn:
         with conn.cursor() as cursor:
-            cursor.execute(
-                sql,
-                (
-                    record["deployment_name"],
-                    record["gpu_vendor"],
-                    record["gpu_type"],
-                    record["gpu_count"],
-                    record["deploy_type"],
-                    record["creator"],
-                    record.get("status", "running"),
-                    json.dumps(node_ports, ensure_ascii=False) if node_ports is not None else None,
-                    record.get("log_path"),
-                ),
-            )
+            cursor.execute(sql, tuple(params))
             record["id"] = cursor.lastrowid
     return record
 

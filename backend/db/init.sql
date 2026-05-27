@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS sys_user (
 
 CREATE TABLE IF NOT EXISTS deploy_instance (
   id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '实例记录主键 ID',
-  deployment_name VARCHAR(128) NOT NULL UNIQUE COMMENT 'Kubernetes Deployment 名称，实例业务唯一标识',
+  instance_name VARCHAR(128) NOT NULL COMMENT '实例展示名称，用户给工作负载起的别名',
+  deployment_name VARCHAR(128) NOT NULL UNIQUE COMMENT 'Kubernetes Deployment 名称，真实工作负载 ID',
   gpu_vendor VARCHAR(32) NOT NULL COMMENT 'GPU 厂商，如 NVIDIA、Huawei',
   gpu_type VARCHAR(64) NOT NULL COMMENT '前端展示或请求使用的 GPU 类型，如 NVIDIA/GPU、Huawei/Ascend310P',
   gpu_count INT NOT NULL DEFAULT 1 COMMENT '申请的 GPU 数量',

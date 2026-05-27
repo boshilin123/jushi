@@ -157,6 +157,7 @@ COMPONENTS = {
                             "devices": {"NVIDIA/GPU": 1},
                             "deployType": "NvidiaInfer",
                             "creator": "admin",
+                            "instance_name": "qwen2.5-72b-prod",
                         },
                     },
                 }
@@ -424,6 +425,11 @@ COMPONENTS = {
                     "example": "NvidiaInfer",
                 },
                 "creator": {"type": "string", "example": "alice"},
+                "instance_name": {
+                    "type": "string",
+                    "example": "qwen2.5-72b-prod",
+                    "description": "实例展示名称，用户给工作负载起的别名；不传时后端可退回使用 deployment_name",
+                },
             },
             "required": ["devices", "deployType", "creator"],
         },

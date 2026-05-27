@@ -12,6 +12,7 @@ def build_deploy_record(
     devices = content.get("devices", {}) or {}
     gpu_type = next(iter(devices.keys()), "")
     return {
+        "instance_name": content.get("instance_name") or content.get("name") or name,
         "deployment_name": name,
         "gpu_vendor": gpu_vendor,
         "gpu_type": gpu_type,

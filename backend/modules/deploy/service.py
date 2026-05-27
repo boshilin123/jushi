@@ -900,8 +900,7 @@ def retrieve(payload: dict) -> tuple[dict, int]:
 
         # 查询详情只返回前端展示字段，不透传 PaaS 原始对象，也不写数据库。
         content = {
-            "instance_name": name,
-            "workload_id": name,
+            "deployment_name": name,
             "status": deployment.get("state") or first_pod.get("phase"),
             "creator": deployment.get("creator"),
             "created_at": deployment.get("created_at"),

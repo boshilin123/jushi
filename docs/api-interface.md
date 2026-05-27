@@ -517,7 +517,8 @@ NVIDIA 请求：
       "NVIDIA/GPU": 1
     },
     "deployType": "NvidiaInfer",
-    "creator": "admin"
+    "creator": "admin",
+    "instance_name": "qwen2.5-72b-prod"
   }
 }
 ```
@@ -647,7 +648,7 @@ NVIDIA 请求：
   - `port_block_rule` 中的封闭端口，可直接调用 `backend/modules/ports/repository.py` 的 `resolve_blocked_ports()`。
   - PaaS/Kubernetes 已存在 Service 的 `nodePort`。
   - 宿主机已绑定端口。
-- 创建成功后写入 `deploy_instance` 表，至少保存 `deployment_name`、GPU 字段、`deploy_type`、`creator`、`status`、`node_ports`、`log_path`。
+- 创建成功后写入 `deploy_instance` 表，至少保存 `instance_name`、`deployment_name`、GPU 字段、`deploy_type`、`creator`、`status`、`node_ports`、`log_path`。其中 `instance_name` 是实例展示名称，`deployment_name` 是真实 Kubernetes/PaaS 工作负载名。
 
 响应：
 
@@ -730,8 +731,7 @@ POST /api/deploy/retrieve
   "msg": "OK",
   "is_success": true,
   "content": {
-    "instance_name": "nvidia-cuda-xxxxxx",
-    "workload_id": "nvidia-cuda-xxxxxx",
+    "deployment_name": "nvidia-cuda-xxxxxx",
     "status": "Running",
     "creator": "admin",
     "created_at": "2026-05-26 11:08:28",

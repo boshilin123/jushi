@@ -29,6 +29,7 @@ export type CreateDeployContent = {
   devices: Record<DeployResourceName | string, number>;
   deployType: DeployType;
   creator: string;
+  instance_name?: string;
 };
 
 export type CreateDeployResult = {

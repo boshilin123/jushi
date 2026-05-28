@@ -314,14 +314,13 @@ def _build_deployment(
     *,
     name: str,
     instance_name: str,
-    creator: str,
     client_ip: str,
     deploy_type: str,
     device_request: dict,
     subport: int,
     workshop_mode: bool,
 ) -> dict:
-    safe_creator = _safe_label_value(creator)
+    safe_instance_name = _safe_label_value(instance_name or name)
     safe_client_ip = _safe_shell_value(client_ip)
     alias_name = str(instance_name or name).strip()
     created_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
@@ -359,7 +358,7 @@ def _build_deployment(
         "metadata": {
             "name": name,
             "namespace": Config.DCE_NAMESPACE,
-            "labels": {"app": name, "creator": safe_creator},
+            "labels": {"app": name, "instance_name": safe_instance_name},
             "annotations": {
                 "kpanda.io/alias-name": f"{alias_name}/{client_ip}" if client_ip else alias_name,
                 "createdAt": created_at,
@@ -372,7 +371,7 @@ def _build_deployment(
             "replicas": 1,
             "selector": {"matchLabels": {"app": name}},
             "template": {
-                "metadata": {"labels": {"app": name, "creator": safe_creator}},
+                "metadata": {"labels": {"app": name, "instance_name": safe_instance_name}},
                 "spec": {
                     "initContainers": [{
                         "name": "init-copy-unzip",
@@ -405,16 +404,16 @@ def _build_deployment(
     }
 
 
-def _build_service(*, name: str, creator: str, client_ip: str, deploy_type: str) -> dict:
+def _build_service(*, name: str, instance_name: str, client_ip: str, deploy_type: str) -> dict:
     created_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-    safe_creator = _safe_label_value(creator)
+    safe_instance_name = _safe_label_value(instance_name or name)
     return {
         "apiVersion": "v1",
         "kind": "Service",
         "metadata": {
             "name": name,
             "namespace": Config.DCE_NAMESPACE,
-            "labels": {"app": name, "creator": safe_creator},
+            "labels": {"app": name, "instance_name": safe_instance_name},
             "annotations": {
                 "createdAt": created_at,
                 "creatorIp": client_ip,
@@ -727,6 +726,7 @@ def create_default(payload: dict) -> tuple[dict, int]:
                 return precheck_result, precheck_http_status
 
             name = f"nvidia-cuda-{uuid.uuid4().hex[:6]}"
+            instance_name = str(content.get("instance_name") or "").strip() or name
             if workshop_mode:
                 subport = WORKSHOP_PORT_8019
             else:
@@ -737,8 +737,7 @@ def create_default(payload: dict) -> tuple[dict, int]:
 
             deployment = _build_deployment(
                 name=name,
-                instance_name=str(content.get("instance_name") or "").strip() or name,
-                creator=creator,
+                instance_name=instance_name,
                 client_ip=client_ip,
                 deploy_type=deploy_type,
                 device_request=device_request,
@@ -771,7 +770,7 @@ def create_default(payload: dict) -> tuple[dict, int]:
             else:
                 service = _build_service(
                     name=name,
-                    creator=creator,
+                    instance_name=instance_name,
                     client_ip=client_ip,
                     deploy_type=deploy_type,
                 )
@@ -893,6 +892,7 @@ def retrieve(payload: dict) -> tuple[dict, int]:
         pod_status, pod_result = client.request_with_status("GET", pod_path)
         pods = []
         deployment = summarize_deployment(deployment_result)
+        record = repository.get_deploy_instance(name) or {}
         summary = summarize_pods(pods)
         first_pod = {}
         gpu_resources = gpu_resource_limits(deployment_result)
@@ -906,9 +906,10 @@ def retrieve(payload: dict) -> tuple[dict, int]:
         # 查询详情只返回前端展示字段，不透传 PaaS 原始对象，也不写数据库。
         content = {
             "deployment_name": name,
+            "instance_name": record.get("instance_name") or deployment.get("instance_name") or name,
             "status": deployment.get("state") or first_pod.get("phase"),
-            "creator": deployment.get("creator"),
-            "created_at": deployment.get("created_at"),
+            "creator": record.get("creator") or deployment.get("creator"),
+            "created_at": deployment.get("created_at") or record.get("created_at"),
             "deploy_area": first_pod.get("node_name"),
             "replica_count": f"{summary['ready_pods']}/{deployment.get('replicas', 0)} 个",
             "service_endpoint": deployment.get("creator_ip"),

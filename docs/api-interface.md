@@ -423,7 +423,7 @@ content.creator -> 当前登录用户 username -> X-User / X-Forwarded-User -> u
 创建 Deployment / PodTemplate / Service 时建议写入：
 
 ```text
-metadata.labels.creator
+metadata.labels.instance_name
 metadata.annotations.createdAt
 metadata.annotations.creatorIp
 metadata.annotations.deployType
@@ -1790,7 +1790,7 @@ type ApiEnvelope<T> = {
 | `msg_id` / `serial` / `context` | 请求 envelope | 响应回传和链路追踪 |
 | `content.devices` | 前端选择 | 资源预检和容器 requests/limits |
 | `content.deployType` | 前端选择 | 区分 NVIDIA/Huawei 模板 |
-| `content.creator` | 前端或当前用户 | 写入 label/annotation 和本地表 |
+| `content.creator` | 前端或当前用户 | 写入本地表，作为创建人审计字段 |
 | `gpu_resource_name` | Huawei 兼容字段 | 指定底层 K8s 资源名 |
 
 部署类接口当前会校验 `msg_id` / `serial` 前缀和 `context`，例如查询单个部署必须使用 `retrieve-` 前缀和 `retrieve deploy` 上下文；创建部署必须使用 `create-` 前缀和 `create inference instance` 上下文。前端不要复用其他动作的 envelope。

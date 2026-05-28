@@ -95,6 +95,7 @@ def summarize_deployment(deployment: dict) -> dict:
         "uid": metadata.get("uid"),
         "created_at": annotations.get("createdAt") or metadata.get("creationTimestamp"),
         "creator": labels.get("creator"),
+        "instance_name": labels.get("instance_name"),
         "creator_ip": annotations.get("creatorIp"),
         "deployType": annotations.get("deployType"),
         "workshop_mode": annotations.get("workshopMode") == "true",

@@ -99,6 +99,7 @@ def list_deploy_instances():
                 SELECT
                     {instance_expr},
                     deployment_name,
+                    creator,
                     status,
                     created_at
                 FROM deploy_instance
@@ -111,6 +112,34 @@ def list_deploy_instances():
     for row in rows:
         row["created_at"] = _format_datetime(row.get("created_at"))
     return rows
+
+
+def get_deploy_instance(name: str) -> dict | None:
+    if not name:
+        return None
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SHOW COLUMNS FROM deploy_instance LIKE 'instance_name'")
+            has_instance_name = cursor.fetchone() is not None
+            instance_expr = "instance_name" if has_instance_name else "deployment_name AS instance_name"
+            cursor.execute(
+                f"""
+                SELECT
+                    {instance_expr},
+                    deployment_name,
+                    creator,
+                    status,
+                    created_at
+                FROM deploy_instance
+                WHERE deployment_name = %s
+                LIMIT 1
+                """,
+                (name,),
+            )
+            row = cursor.fetchone()
+    if row:
+        row["created_at"] = _format_datetime(row.get("created_at"))
+    return row
 
 
 def update_deploy_status(name: str, status: str):

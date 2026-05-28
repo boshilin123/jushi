@@ -12,7 +12,7 @@
 平台底座：PaaS / Kubernetes
 ```
 
-现有后端已经具备推理部署的基础能力，包括资源预检、创建部署、查询部署、释放部署、重启部署和部署列表接口。创建接口已经支持创建 Deployment + NodePort Service，并写入 creator、createdAt、creatorIp、deployType 等标记。
+现有后端已经具备推理部署的基础能力，包括资源预检、创建部署、查询部署、释放部署、重启部署和部署列表接口。创建接口已经支持创建 Deployment + NodePort Service，并写入 instance_name、createdAt、creatorIp、deployType 等标记；creator 保存在本地实例表用于审计。
 
 端口避让服务已经具备查询、新增、修改、删除和解析快照接口，可用于创建实例时提前排除不允许随机分配的端口。
 

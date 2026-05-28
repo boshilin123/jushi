@@ -55,10 +55,10 @@ DEPLOY_PATHS = {
     "/api/deploy/logs": {
         "post": {
             "tags": ["Deploy"],
-            "summary": "部署日志",
-            "description": "按 deployment_name 查询对应 Pod，并通过 Kubernetes Pod log API 读取实时日志，同时返回该 Pod 的调度事件；日志和事件不保存到数据库。",
+            "summary": "部署 Pod 描述",
+            "description": "按 deployment_name 查询对应 Pod，并返回接近 kubectl describe pod 的完整描述文本；不会返回容器 stdout 日志。",
             "requestBody": {"$ref": "#/components/requestBodies/DeployLogsEnvelope"},
-            "responses": {"200": {"description": "部署日志"}},
+            "responses": {"200": {"description": "部署 Pod 描述"}},
         }
     },
     "/api/deploy/list": {

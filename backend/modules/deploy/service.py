@@ -1023,6 +1023,233 @@ def _pod_event_items(result) -> list[dict]:
     return events
 
 
+def _describe_time(value) -> str:
+    return str(value or "<none>")
+
+
+def _describe_list(values) -> str:
+    if not values:
+        return "      <none>"
+    return "\n".join(f"      {value}" for value in values)
+
+
+def _resource_lines(resources: dict, key: str) -> list[str]:
+    values = (resources.get(key) or {}) if isinstance(resources, dict) else {}
+    if not values:
+        return [f"    {key.title()}:           <none>"]
+    lines = [f"    {key.title()}:"]
+    for name, value in values.items():
+        lines.append(f"      {name}:  {value}")
+    return lines
+
+
+def _container_status_by_name(statuses: list[dict]) -> dict:
+    return {
+        item.get("name"): item
+        for item in statuses or []
+        if isinstance(item, dict) and item.get("name")
+    }
+
+
+def _container_state_lines(status: dict) -> list[str]:
+    state = (status or {}).get("state") or {}
+    if "running" in state:
+        running = state["running"] or {}
+        return [
+            "    State:          Running",
+            f"      Started:      {_describe_time(running.get('startedAt'))}",
+        ]
+    if "terminated" in state:
+        terminated = state["terminated"] or {}
+        return [
+            "    State:          Terminated",
+            f"      Reason:       {terminated.get('reason') or '<none>'}",
+            f"      Exit Code:    {terminated.get('exitCode') if terminated.get('exitCode') is not None else '<none>'}",
+            f"      Started:      {_describe_time(terminated.get('startedAt'))}",
+            f"      Finished:     {_describe_time(terminated.get('finishedAt'))}",
+        ]
+    if "waiting" in state:
+        waiting = state["waiting"] or {}
+        return [
+            "    State:          Waiting",
+            f"      Reason:       {waiting.get('reason') or '<none>'}",
+            f"      Message:      {waiting.get('message') or '<none>'}",
+        ]
+    return ["    State:          <none>"]
+
+
+def _container_describe_lines(container: dict, status: dict | None = None) -> list[str]:
+    status = status or {}
+    lines = [
+        f"  {container.get('name')}:",
+        f"    Container ID:  {status.get('containerID') or '<none>'}",
+        f"    Image:         {container.get('image') or '<none>'}",
+        f"    Image ID:      {status.get('imageID') or '<none>'}",
+    ]
+    ports = container.get("ports") or []
+    if ports:
+        port_text = ", ".join(f"{item.get('containerPort')}/{item.get('protocol', 'TCP')}" for item in ports)
+        host_port_text = ", ".join(f"{item.get('hostPort', 0)}/{item.get('protocol', 'TCP')}" for item in ports)
+    else:
+        port_text = "<none>"
+        host_port_text = "<none>"
+    lines.extend([
+        f"    Port:          {port_text}",
+        f"    Host Port:     {host_port_text}",
+        "    Command:",
+        _describe_list(container.get("command")),
+        "    Args:",
+        _describe_list(container.get("args")),
+    ])
+    lines.extend(_container_state_lines(status))
+    lines.extend([
+        f"    Ready:          {status.get('ready') if status.get('ready') is not None else '<none>'}",
+        f"    Restart Count:  {status.get('restartCount', 0)}",
+    ])
+    lines.extend(_resource_lines(container.get("resources") or {}, "limits"))
+    lines.extend(_resource_lines(container.get("resources") or {}, "requests"))
+    env = container.get("env") or []
+    lines.append("    Environment:    <none>" if not env else "    Environment:")
+    for item in env:
+        lines.append(f"      {item.get('name')}:  {item.get('value') or '<set>'}")
+    mounts = container.get("volumeMounts") or []
+    lines.append("    Mounts:")
+    if mounts:
+        for item in mounts:
+            mode = "ro" if item.get("readOnly") else "rw"
+            lines.append(f"      {item.get('mountPath')} from {item.get('name')} ({mode})")
+    else:
+        lines.append("      <none>")
+    return lines
+
+
+def _volume_describe_lines(volume: dict) -> list[str]:
+    name = volume.get("name")
+    lines = [f"  {name}:"]
+    if "emptyDir" in volume:
+        empty_dir = volume.get("emptyDir") or {}
+        lines.extend([
+            "    Type:       EmptyDir (a temporary directory that shares a pod's lifetime)",
+            f"    Medium:     {empty_dir.get('medium') or ''}",
+            f"    SizeLimit:  {empty_dir.get('sizeLimit') or '<unset>'}",
+        ])
+    elif "hostPath" in volume:
+        host_path = volume.get("hostPath") or {}
+        lines.extend([
+            "    Type:          HostPath (bare host directory volume)",
+            f"    Path:          {host_path.get('path') or '<none>'}",
+            f"    HostPathType:  {host_path.get('type') or ''}",
+        ])
+    elif "projected" in volume:
+        lines.append("    Type:                    Projected")
+    else:
+        lines.append("    Type:       <unknown>")
+    return lines
+
+
+def _event_describe_lines(events: list[dict], event_error: dict | None = None) -> list[str]:
+    lines = [
+        "Events:",
+        "  Type     Reason            Age   From               Message",
+        "  ----     ------            ----  ----               -------",
+    ]
+    if event_error:
+        message = ((event_error.get("response") or {}).get("message") or str(event_error))
+        lines.append(f"  Warning  Forbidden         -     apiserver          {message}")
+        return lines
+    if not events:
+        lines.append("  <none>")
+        return lines
+    for event in events:
+        lines.append(
+            f"  {event.get('type') or '<none>':<8} "
+            f"{event.get('reason') or '<none>':<17} "
+            f"{event.get('last_timestamp') or '-':<5} "
+            f"{event.get('source') or '<none>':<18} "
+            f"{event.get('message') or ''}"
+        )
+    return lines
+
+
+def _pod_describe_text(pod: dict, events: list[dict], event_error: dict | None = None) -> str:
+    metadata = pod.get("metadata") or {}
+    spec = pod.get("spec") or {}
+    status = pod.get("status") or {}
+    labels = metadata.get("labels") or {}
+    annotations = metadata.get("annotations") or {}
+    owner_refs = metadata.get("ownerReferences") or []
+    init_statuses = _container_status_by_name(status.get("initContainerStatuses") or [])
+    container_statuses = _container_status_by_name(status.get("containerStatuses") or [])
+
+    lines = [
+        f"Name:             {metadata.get('name') or '<none>'}",
+        f"Namespace:        {metadata.get('namespace') or '<none>'}",
+        f"Priority:         {spec.get('priority') if spec.get('priority') is not None else 0}",
+        f"Service Account:  {spec.get('serviceAccountName') or '<none>'}",
+        f"Node:             {spec.get('nodeName') or '<none>'}/{status.get('hostIP') or '<none>'}",
+        f"Start Time:       {_describe_time(status.get('startTime'))}",
+        "Labels:",
+    ]
+    if labels:
+        first = True
+        for key, value in labels.items():
+            prefix = "  " if first else "                  "
+            lines.append(f"{prefix}{key}={value}")
+            first = False
+    else:
+        lines.append("  <none>")
+    lines.append("Annotations:")
+    if annotations:
+        first = True
+        for key, value in annotations.items():
+            prefix = "  " if first else "                  "
+            lines.append(f"{prefix}{key}: {value}")
+            first = False
+    else:
+        lines.append("  <none>")
+    lines.extend([
+        f"Status:           {status.get('phase') or '<none>'}",
+        f"IP:               {status.get('podIP') or '<none>'}",
+        "IPs:",
+        f"  IP:           {status.get('podIP') or '<none>'}",
+    ])
+    if owner_refs:
+        owner = owner_refs[0]
+        lines.append(f"Controlled By:  {owner.get('kind')}/{owner.get('name')}")
+    init_containers = spec.get("initContainers") or []
+    if init_containers:
+        lines.append("Init Containers:")
+        for container in init_containers:
+            lines.extend(_container_describe_lines(container, init_statuses.get(container.get("name"))))
+    containers = spec.get("containers") or []
+    if containers:
+        lines.append("Containers:")
+        for container in containers:
+            lines.extend(_container_describe_lines(container, container_statuses.get(container.get("name"))))
+    lines.append("Conditions:")
+    lines.append("  Type              Status")
+    for condition in status.get("conditions") or []:
+        lines.append(f"  {condition.get('type'):<17} {condition.get('status')}")
+    lines.append("Volumes:")
+    for volume in spec.get("volumes") or []:
+        lines.extend(_volume_describe_lines(volume))
+    lines.extend([
+        f"QoS Class:                   {status.get('qosClass') or '<none>'}",
+        "Node-Selectors:              <none>" if not spec.get("nodeSelector") else f"Node-Selectors:              {spec.get('nodeSelector')}",
+        "Tolerations:",
+    ])
+    tolerations = spec.get("tolerations") or []
+    if tolerations:
+        for item in tolerations:
+            effect = f":{item.get('effect')}" if item.get("effect") else ""
+            seconds = f" for {item.get('tolerationSeconds')}s" if item.get("tolerationSeconds") is not None else ""
+            lines.append(f"  {item.get('key')}:{item.get('operator') or 'Equal'}{effect}{seconds}")
+    else:
+        lines.append("  <none>")
+    lines.extend(_event_describe_lines(events, event_error))
+    return "\n".join(lines)
+
+
 def _pod_delete_targets(pods: list[dict]) -> list[dict]:
     running_pods = [pod for pod in pods if pod.get("phase") == "Running"]
     return running_pods or pods
@@ -1183,11 +1410,8 @@ def logs(payload: dict) -> dict:
     if error_response:
         return error_response
 
-    content = payload.get("content", {}) or {}
-    tail_lines = _parse_int_quantity(content.get("tail_lines") or content.get("tailLines") or 200)
-    tail_lines = max(1, min(tail_lines, 1000))
-
-    # 前端只传 deployment_name；后端通过 Kubernetes app label 找到对应 Pod 后直接读取 Pod 日志。
+    # 前端只传 deployment_name；后端先通过 Kubernetes app label 找到真实 Pod 名称，
+    # 再读取 Pod 对象并拼出接近 `kubectl describe pod` 的完整描述文本。
     pod_status, pod_result = client.list_pods_by_app(Config.DCE_NAMESPACE, name)
     if pod_status != 200:
         msg = "查询部署 Pod 失败"
@@ -1207,33 +1431,30 @@ def logs(payload: dict) -> dict:
     pod = next((item for item in pods if item.get("phase") == "Running"), None) or (pods[0] if pods else {})
     pod_name = pod.get("pod_name")
     if not pod_name:
-        msg = "部署暂无可读取日志的 Pod"
-        return _response_envelope(payload, {"deployment_name": name, "lines": []}, 404, msg, -1)
+        msg = "部署暂无可描述的 Pod"
+        return _response_envelope(payload, {"deployment_name": name, "describe": ""}, 404, msg, -1)
 
-    log_status, log_result = client.pod_logs(Config.DCE_NAMESPACE, pod_name, tail_lines)
-    if not 200 <= log_status < 300:
-        msg = "部署日志查询失败"
+    pod_read_status, pod_read_result = client.read_pod(Config.DCE_NAMESPACE, pod_name)
+    if not 200 <= pod_read_status < 300 or not isinstance(pod_read_result, dict):
+        msg = "部署 Pod 描述查询失败"
         return _response_envelope(
             payload,
-            {"deployment_name": name, "pod_name": pod_name, "response": log_result},
-            log_status,
+            {"deployment_name": name, "pod_name": pod_name, "response": pod_read_result},
+            pod_read_status,
             msg,
             -1,
         )
 
-    lines = _pod_log_lines(log_result)
     event_status, event_result = client.list_events(Config.DCE_NAMESPACE, pod_name)
     events = _pod_event_items(event_result) if 200 <= event_status < 300 else []
     event_error = None if 200 <= event_status < 300 else {"status": event_status, "response": event_result}
+    describe = _pod_describe_text(pod_read_result, events, event_error)
     return _response_envelope(
         payload,
         {
             "deployment_name": name,
             "pod_name": pod_name,
-            "tail_lines": tail_lines,
-            "lines": lines,
-            "events": events,
-            "event_error": event_error,
+            "describe": describe,
         },
         200,
         "OK",

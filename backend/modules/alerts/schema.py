@@ -8,7 +8,7 @@ def normalize_alert_query(payload: dict) -> dict:
         "page": content.get("page", 1),
         "page_size": content.get("page_size", 20),
         "status": content.get("status"),
-        "source": content.get("source"),
+        "deployment_name": content.get("deployment_name"),
     }
 
 
@@ -34,5 +34,9 @@ def normalize_alert_create(payload: dict) -> dict:
         "message": source.get("message", ""),
         "source": source.get("source", ""),
         "target_name": source.get("target_name", ""),
+        "instance_name": source.get("instance_name"),
+        "deployment_name": source.get("deployment_name"),
+        "fingerprint": source.get("fingerprint"),
+        "evidence": source.get("evidence"),
         "status": source.get("status") or "open",
     }

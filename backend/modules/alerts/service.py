@@ -1,9 +1,12 @@
-from . import repository
+from . import detector, repository
 
 
 def list_alerts(query: dict) -> dict:
-    # 告警列表业务，后续加入筛选、分页和排序。
-    return {"is_success": True, **repository.list_alerts(query)}
+    # 告警列表先扫描 algorithm 命名空间，再返回未静默/未解决的实例级告警。
+    detected, scan_error = detector.detect_algorithm_alerts()
+    written = repository.upsert_detected_alerts(detected)
+    result = repository.list_alerts(query)
+    return {"is_success": True, "scan_error": scan_error, "detected": len(detected), "written": written, **result}
 
 
 def create_alert(payload: dict) -> dict:

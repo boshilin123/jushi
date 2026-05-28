@@ -54,16 +54,23 @@ CREATE TABLE IF NOT EXISTS operation_log (
 
 CREATE TABLE IF NOT EXISTS alert_event (
   id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '告警事件主键 ID',
-  alert_type VARCHAR(64) NOT NULL COMMENT '告警类型，如 resource_insufficient、pod_failed、port_unavailable',
+  alert_type VARCHAR(64) DEFAULT NULL COMMENT '告警类型，如 image_pull_failed、pod_failed、pending_timeout',
   alert_level VARCHAR(32) NOT NULL COMMENT '告警级别，如 high、medium、low',
   title VARCHAR(128) NOT NULL COMMENT '告警标题',
   message TEXT DEFAULT NULL COMMENT '告警详细描述',
   source VARCHAR(64) DEFAULT NULL COMMENT '告警来源模块，如 deploy、pod、resource、port',
   target_name VARCHAR(128) DEFAULT NULL COMMENT '告警对象名称，如实例名、Pod 名、节点名或资源名',
+  instance_name VARCHAR(128) DEFAULT NULL COMMENT '实例展示名称',
+  deployment_name VARCHAR(128) DEFAULT NULL COMMENT 'Kubernetes Deployment 名称',
+  fingerprint VARCHAR(255) DEFAULT NULL COMMENT '告警去重指纹',
+  last_seen_at DATETIME DEFAULT NULL COMMENT '最近一次检测到该告警的时间',
+  evidence JSON DEFAULT NULL COMMENT '告警证据快照，如 Pod 状态、事件和日志关键字',
+  occurrence_count INT NOT NULL DEFAULT 1 COMMENT '同一告警累计检测次数',
   status VARCHAR(32) NOT NULL DEFAULT 'open' COMMENT '告警状态：open 未处理，resolved 已解决，ignored 已忽略',
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   resolved_at DATETIME DEFAULT NULL COMMENT '解决时间',
-  resolver VARCHAR(64) DEFAULT NULL COMMENT '处理人用户名'
+  resolver VARCHAR(64) DEFAULT NULL COMMENT '处理人用户名',
+  UNIQUE KEY uk_alert_fingerprint (fingerprint)
 ) COMMENT='告警事件表，保存资源、实例、Pod 和端口相关告警';
 
 CREATE TABLE IF NOT EXISTS resource_snapshot (
@@ -87,3 +94,8 @@ INSERT IGNORE INTO sys_user (
   'admin',
   'active'
 );
+
+ALTER TABLE alert_event
+  MODIFY alert_type VARCHAR(64) NULL,
+  MODIFY source VARCHAR(64) NULL,
+  MODIFY target_name VARCHAR(128) NULL;

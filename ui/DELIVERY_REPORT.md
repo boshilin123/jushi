@@ -33,24 +33,21 @@
 5. `POST /api/deploy/reset`
 6. `POST /api/deploy/release`
 7. `POST /api/deploy/stop`
-8. `POST /api/deploy/queue`
-9. `POST /api/deploy/logs`
-10. `POST /api/ports/allowlist/list`
-11. `POST /api/ports/allowlist/create`
-12. `POST /api/ports/allowlist/delete`
-13. `POST /api/alerts/list`
-14. `POST /api/alerts/resolve`
-15. `POST /api/audits/list`
-16. `POST /api/audits/import`
-17. `POST /api/audits/export`
+8. `POST /api/deploy/logs`，成功响应为 `text/plain` Pod describe 文本
+9. `GET /api/port-list/list`
+10. `POST /api/port-list/add`
+11. `PUT /api/port-list/update/{item_id}`
+12. `DELETE /api/port-list/delete/{item_id}`
+13. `GET /api/port-list/resolve`
+14. `POST /api/alerts/list`
+15. `POST /api/alerts/resolve`
+16. `POST /api/alerts/ignore`
 
 待后端确认：
 
-- 停止接口是否按 `/api/deploy/stop` 提供。
-- 日志接口是否按 `/api/deploy/logs` 提供，是否需要流式输出。
-- 资源不足时是否直接创建排队任务。
+- 资源不足排队 `/api/deploy/queue` 是否重新纳入范围。
 - vGPU 预测占用是否由后端返回。
-- 端口白名单、告警、审计日志是否提供分页与权限控制。
+- 审计日志导入、导出是否继续保留在一期范围。
 
 ## 4. 已知非阻塞项
 

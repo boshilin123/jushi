@@ -123,6 +123,7 @@ COMPONENTS = {
                                     "devices": {"NVIDIA/GPU": 1},
                                     "deployType": "NvidiaInfer",
                                     "creator": "admin",
+                                    "instance_name": "qwen2.5-72b-prod",
                                 },
                             },
                         },
@@ -137,6 +138,7 @@ COMPONENTS = {
                                     "devices": {"Huawei/Ascend310P": 1},
                                     "deployType": "HuaweiInfer",
                                     "creator": "admin",
+                                    "instance_name": "ascend-test",
                                 },
                             },
                         },
@@ -204,7 +206,7 @@ COMPONENTS = {
                             },
                         },
                         "huawei": {
-                            "summary": "Huawei Ascend 创建推理部署",
+                            "summary": "Huawei Ascend 创建请求（当前集群暂不支持）",
                             "value": {
                                 "msg_id": "create-huawei-001",
                                 "serial": "create-serial-001",
@@ -287,7 +289,7 @@ COMPONENTS = {
                         "msg_id": "logs-001",
                         "serial": "logs-serial-001",
                         "context": "deploy logs",
-                        "content": {"name": "nvidia-cuda-xxxxxx", "tail_lines": 200},
+                        "content": {"name": "nvidia-cuda-xxxxxx"},
                     },
                 }
             },

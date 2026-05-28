@@ -154,6 +154,8 @@ Authorization: Bearer <login_token>
 5. POST /api/deploy/list
 6. POST /api/deploy/release
 7. POST /api/deploy/reset
+8. POST /api/deploy/stop
+9. POST /api/deploy/logs
 ```
 
 一期暂不优先开发：
@@ -162,7 +164,7 @@ Authorization: Bearer <login_token>
 POST /api/deploy/queue
 ```
 
-`queue` 只在资源不足排队能力重新纳入一期范围时实现。`stop` 和 `logs` 可以作为实例中心增强接口，在核心创建/释放链路稳定后补齐。
+`queue` 只在资源不足排队能力重新纳入一期范围时实现。`stop` 已用于缩容停止，`logs` 入口当前用于返回 Pod describe 风格排障文本。
 
 ## 3. 用户认证接口
 
@@ -386,7 +388,8 @@ Content-Type: application/json
     "NVIDIA/GPU": 1
   },
   "deployType": "NvidiaInfer",
-  "creator": "admin"
+  "creator": "admin",
+  "instance_name": "qwen2.5-72b-prod"
 }
 ```
 
@@ -407,7 +410,8 @@ Huawei 请求建议同时传顶层 `gpu_resource_name`：
       "Huawei/Ascend310P": 1
     },
     "deployType": "HuaweiInfer",
-    "creator": "admin"
+    "creator": "admin",
+    "instance_name": "ascend-test"
   }
 }
 ```
@@ -428,6 +432,8 @@ metadata.annotations.createdAt
 metadata.annotations.creatorIp
 metadata.annotations.deployType
 ```
+
+`creator` 不再写入 Kubernetes label；创建人保存在本地 `deploy_instance.creator`，查询详情和审计按数据库记录读取。
 
 #### 5.0.3 名称字段
 
@@ -536,7 +542,8 @@ Huawei 请求：
       "Huawei/Ascend310P": 1
     },
     "deployType": "HuaweiInfer",
-    "creator": "admin"
+    "creator": "admin",
+    "instance_name": "ascend-test"
   }
 }
 ```
@@ -550,11 +557,37 @@ Huawei 请求：
   "context": "check deploy available",
   "status": 0,
   "http_status_code": 200,
-  "msg": "资源充足",
+  "msg": "资源预检通过",
   "is_success": true,
   "content": {
     "can_create": true,
-    "reason": "资源充足",
+    "reason": "资源预检通过",
+    "checks": [
+      {
+        "key": "gpu_available",
+        "label": "GPU 可用余量",
+        "status": "passed",
+        "display": "可用 3 / 8 张"
+      },
+      {
+        "key": "cpu_memory",
+        "label": "CPU / 内存余量",
+        "status": "passed",
+        "display": "通过"
+      },
+      {
+        "key": "nodeport",
+        "label": "NodePort 自动避让",
+        "status": "passed",
+        "display": "通过"
+      },
+      {
+        "key": "deploy_lock",
+        "label": "部署锁与并发校验",
+        "status": "passed",
+        "display": "通过"
+      }
+    ],
     "cpu_available_m": 64000,
     "mem_available_bytes": 137438953472,
     "gpu_details": {
@@ -620,7 +653,7 @@ Huawei 请求：
 POST /api/deploy/create-default
 ```
 
-当前状态：后端已实现 NVIDIA 最小闭环。创建成功后会创建 PaaS Deployment / Service，并写入 `deploy_instance` 表。
+当前状态：后端已实现 NVIDIA 最小闭环。创建成功后会创建 PaaS Deployment / Service，并写入 `deploy_instance` 表。Swagger 中保留 Huawei 创建请求示例，但当前 `create-default` 会返回 `400`：`当前集群暂不支持 Huawei/Ascend310P`。
 
 NVIDIA 请求：
 
@@ -634,7 +667,8 @@ NVIDIA 请求：
       "NVIDIA/GPU": 1
     },
     "deployType": "NvidiaInfer",
-    "creator": "admin"
+    "creator": "admin",
+    "instance_name": "qwen2.5-72b-prod"
   }
 }
 ```
@@ -642,13 +676,13 @@ NVIDIA 请求：
 行为要求：
 
 - 创建前必须调用资源预检；预检失败时直接返回 `400`，不得创建任何 PaaS 资源。
-- 按 `deployType` / `devices` 区分 NVIDIA 与 Huawei 模板。
+- 当前创建接口只允许 NVIDIA；Huawei 请求会在创建阶段返回 `400`。资源预检仍保留 Huawei 参数校验能力。
 - 创建 Deployment 后，普通模式创建同名 NodePort Service；车间固定端口模式如继续沿用旧方案，可不创建 Service，但响应仍需返回固定端口。
 - 随机端口必须避开三类端口：
   - `port_block_rule` 中的封闭端口，可直接调用 `backend/modules/ports/repository.py` 的 `resolve_blocked_ports()`。
   - PaaS/Kubernetes 已存在 Service 的 `nodePort`。
   - 宿主机已绑定端口。
-- 创建成功后写入 `deploy_instance` 表，至少保存 `instance_name`、`deployment_name`、GPU 字段、`deploy_type`、`creator`、`status`、`node_ports`、`log_path`。其中 `instance_name` 是实例展示名称，`deployment_name` 是真实 Kubernetes/PaaS 工作负载名。
+- 创建成功后写入 `deploy_instance` 表，至少保存 `instance_name`、`deployment_name`、GPU 字段、`deploy_type`、`creator`、`status`、`node_ports`。`log_path` 字段保留但当前创建响应返回 `null`，日志/排障改走 Kubernetes API。
 - PaaS 工作负载别名写入 `kpanda.io/alias-name = instance_name/client_ip`，方便在 PaaS 平台和本系统列表中对应展示。
 
 响应：
@@ -679,7 +713,10 @@ NVIDIA 请求：
     },
     "gpu_type": "NVIDIA/GPU",
     "deployType": "NvidiaInfer",
-    "log_path": "/workspace/Alg/log/nvidia-cuda-xxxxxx"
+    "log_path": null,
+    "log_source": "paas",
+    "workshop_mode": false,
+    "client_ip": "10.11.20.71"
   }
 }
 ```
@@ -693,7 +730,7 @@ NVIDIA 请求：
   "msg": "创建部署失败",
   "is_success": false,
   "content": {
-    "error": "create deployment failed",
+    "error": "Deployment 创建失败",
     "response": {}
   }
 }
@@ -733,6 +770,7 @@ POST /api/deploy/retrieve
   "is_success": true,
   "content": {
     "deployment_name": "nvidia-cuda-xxxxxx",
+    "instance_name": "qwen2.5-72b-prod",
     "status": "Running",
     "creator": "admin",
     "created_at": "2026-05-26 11:08:28",
@@ -751,6 +789,7 @@ POST /api/deploy/retrieve
 - 查询 PaaS Deployment：`clusters/{cluster}/namespaces/{namespace}/deployments/{name}`。
 - 查询 Pod 时按 Deployment 标签或 owner 关联，优先复用历史脚本中的 labelSelector 方式。
 - 查询同名 Service，提取 `spec.ports[].nodePort` 作为 `open_ports`。
+- `creator` 优先从本地 `deploy_instance.creator` 读取；Kubernetes YAML 中不再写 `labels.creator`。
 - `service_endpoint` 当前返回创建接口写入 Deployment annotation 的 `creatorIp`。
 - `deploy_area` 返回关联 Pod 所在节点名；`replica_count` 返回 `ready_pods / replicas`。
 - `resource_mode` 当前统一返回 `物理 GPU`；`bound_resource` 由节点名和 GPU resource limit 拼装。
@@ -762,7 +801,7 @@ POST /api/deploy/retrieve
 POST /api/deploy/release
 ```
 
-当前状态：后端已实现。会删除同名 Service、Deployment，并删除本地 `deploy_instance` 记录。
+当前状态：后端已实现。会删除同名 Service、Deployment，并把本地 `deploy_instance` 记录软删除为 `released` 状态。
 
 请求：
 
@@ -793,8 +832,9 @@ POST /api/deploy/release
     "status": "released",
     "deployment_delete": {},
     "service_delete": {},
-    "db_delete": {
+    "db_update": {
       "deployment_name": "nvidia-cuda-xxxxxx",
+      "status": "released",
       "affected_rows": 1
     }
   }
@@ -805,7 +845,7 @@ POST /api/deploy/release
 
 - 删除同名 Deployment 和 Service。
 - Service 不存在可视为释放成功，保持幂等。
-- 成功后删除 `deploy_instance` 中的对应记录，不再保留 released 状态数据。
+- 成功后不物理删除 `deploy_instance`，只把状态更新为 `released`；部署列表默认过滤 released 记录。
 - 日志不保存到数据库；释放后若 Deployment/Pod 已删除，日志接口不再能通过集群实时读取该实例日志。
 
 ### 5.6 重启部署
@@ -999,13 +1039,13 @@ POST /api/deploy/queue
 
 说明：只有在重新纳入“一期资源不足排队”范围后再实现。当前资源不足应由 `check-available` 返回 `400` 和明确 reason。若后续启用该接口，建议沿用 `queue-` 作为 `msg_id` / `serial` 前缀。
 
-### 5.10 部署日志
+### 5.10 部署 Pod 描述
 
 ```http
 POST /api/deploy/logs
 ```
 
-当前状态：后端已实现。前端只需要传 Deployment 名称，后端会通过 Kubernetes API 查询对应 Pod 并读取 Pod 日志。
+当前状态：后端已实现。前端只需要传 Deployment 名称，后端会通过 `app=<deployment_name>` 查询真实 Pod，并返回接近 `kubectl describe pod` 的纯文本描述。
 
 请求：
 
@@ -1015,40 +1055,37 @@ POST /api/deploy/logs
   "serial": "logs-serial-001",
   "context": "deploy logs",
   "content": {
-    "name": "nvidia-cuda-xxxxxx",
-    "tail_lines": 200
+    "name": "nvidia-cuda-xxxxxx"
   }
 }
 ```
 
-响应：
+成功响应：
 
-```json
-{
-  "msg_id": "logs-001_Resp",
-  "serial": "logs-serial-001",
-  "context": "deploy logs",
-  "status": 0,
-  "http_status_code": 200,
-  "msg": "OK",
-  "is_success": true,
-  "content": {
-    "deployment_name": "nvidia-cuda-xxxxxx",
-    "pod_name": "nvidia-cuda-xxxxxx-abcde",
-    "tail_lines": 200,
-    "lines": [
-      "service started"
-    ]
-  }
-}
+```http
+HTTP/1.1 200 OK
+Content-Type: text/plain; charset=utf-8
+```
+
+```text
+Name:             nvidia-cuda-xxxxxx-abcde
+Namespace:        algorithm
+Status:           Running
+Containers:
+  nvidia-cuda-xxxxxx:
+    Image:         nvidia/cuda:11.6.2-cudnn8-devel-ubuntu20.04_v1
+    State:         Running
+Events:
+  Type     Reason            Age   From               Message
 ```
 
 实现说明：
 
-- 日志不会保存到数据库，也不读取本地 `deploy_instance`。
-- 后端按 `app=<deployment_name>` 通过 Kubernetes API 查询 Deployment 对应 Pod，优先读取 Running Pod。
-- 再调用 Kubernetes Pod log API 获取最近 `tail_lines` 行。
-- 一期只返回最近 N 行，不做 WebSocket 或实时流。
+- 该接口名称沿用 `/api/deploy/logs`，但当前语义是“Pod 描述/排障文本”，不是容器 stdout 日志。
+- 成功响应为 `text/plain`，Swagger 和前端可直接保留换行；前端应使用 `response.text()` 或 `<pre>` / `white-space: pre-wrap` 展示。
+- 失败响应仍返回原 envelope JSON，便于复用部署类错误处理。
+- 后端按 `app=<deployment_name>` 通过 Kubernetes API 查询 Deployment 对应 Pod，优先选择 Running Pod。
+- 后端会读取 Pod 对象并拼出 describe 文本；Events 区域需要当前 K8s token 具备 `events` 的 `get/list/watch` 权限，否则无法完整显示事件。
 
 ## 6. 封闭端口 / 端口避让接口
 
@@ -1424,7 +1461,7 @@ POST /api/pods/restart
 POST /api/alerts/list
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已实现。列表接口会先扫描 `algorithm` 命名空间下的 Pod 与 Events，写入/更新 `alert_event` 后再返回未解决、未忽略的实例级告警。
 
 请求：
 
@@ -1445,21 +1482,54 @@ POST /api/alerts/list
 ```json
 {
   "is_success": true,
-  "content": [
+  "scan_error": null,
+  "detected": 2,
+  "written": 2,
+  "items": [
     {
-      "id": "alert-001",
+      "id": "1",
+      "alert_type": "pod_pending",
+      "alert_level": "high",
       "level": "high",
-      "category": "资源不足",
       "title": "GPU 资源不足",
-      "target": "NVIDIA/GPU",
-      "description": "当前 GPU 可用数量不足",
-      "action": "等待资源释放或降低申请数量",
-      "created_at": "2026-05-21 15:30:00",
-      "status": "open"
+      "message": "0/2 nodes are available: 2 Insufficient nvidia.com/gpu.",
+      "description": "0/2 nodes are available: 2 Insufficient nvidia.com/gpu.",
+      "source": "algorithm",
+      "target_name": "nvidia-cuda-xxxxxx-abcde",
+      "target": "nvidia-cuda-xxxxxx-abcde",
+      "instance_name": "qwen2.5-72b-prod",
+      "deployment_name": "nvidia-cuda-xxxxxx",
+      "display_status": "异常",
+      "status": "open",
+      "created_at": "2026-05-28 19:41:02",
+      "last_seen_at": "2026-05-28 20:10:00",
+      "resolved_at": null,
+      "resolver": null,
+      "occurrence_count": 3,
+      "evidence": {}
     }
-  ]
+  ],
+  "summary": {
+    "open_total": 4,
+    "high": 2,
+    "medium": 1,
+    "low": 1,
+    "avg_handle_minutes": 7,
+    "health_score": 86
+  },
+  "total": 4,
+  "page": 1,
+  "page_size": 20
 }
 ```
+
+实现说明：
+
+- 告警只扫描 `algorithm` 命名空间。
+- 告警来源当前为 Pod phase、容器 waiting/terminated reason 以及 Pod Events。
+- Events 读取依赖 K8s token 对 `events` 资源具备 `list` 权限；无权限时 `scan_error` 会说明原因，列表仍返回数据库中已有告警。
+- `instance_name` 优先来自 `deploy_instance.instance_name`，`deployment_name` 来自 Pod 的 `app` label。
+- `ignored` 状态不会被自动扫描重新打开，可用于前端“静默处理”。
 
 ### 9.2 创建告警
 
@@ -1467,7 +1537,7 @@ POST /api/alerts/list
 POST /api/alerts/create
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已实现。主要供后端流程或调试手工写入告警；自动告警优先通过 `/api/alerts/list` 扫描生成。
 
 请求：
 
@@ -1496,7 +1566,7 @@ POST /api/alerts/create
 POST /api/alerts/resolve
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已实现。把告警状态更新为 `resolved`，记录处理人和解决时间。
 
 请求：
 
@@ -1522,7 +1592,7 @@ POST /api/alerts/resolve
 POST /api/alerts/ignore
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已实现。把告警状态更新为 `ignored`，用于前端“静默处理”，后续自动扫描不会重新打开该指纹告警。
 
 请求：
 
@@ -1900,6 +1970,15 @@ POST /api/cluster
 POST /api/deploy/check-available
 POST /api/deploy/create-default
 POST /api/deploy/retrieve
+POST /api/deploy/release
+POST /api/deploy/reset
+POST /api/deploy/stop
+POST /api/deploy/list
+POST /api/deploy/logs
+POST /api/alerts/list
+POST /api/alerts/create
+POST /api/alerts/resolve
+POST /api/alerts/ignore
 GET  /api/port-list/list
 POST /api/port-list/add
 PUT  /api/port-list/update/{item_id}
@@ -1907,20 +1986,10 @@ DELETE /api/port-list/delete/{item_id}
 GET  /api/port-list/resolve
 ```
 
-部署类下一步优先补齐实现：
-
-```text
-POST /api/deploy/list
-POST /api/deploy/release
-POST /api/deploy/reset
-```
-
 后续业务增强或暂缓接口：
 
 ```text
-POST /api/deploy/stop
 POST /api/deploy/queue
-POST /api/deploy/logs
 POST /api/audits/list
 POST /api/audits/import
 POST /api/audits/export

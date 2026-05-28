@@ -11,6 +11,7 @@ DEPLOY_PATHS = {
         "post": {
             "tags": ["Deploy"],
             "summary": "创建推理部署",
+            "description": "当前创建链路仅支持 NVIDIA；Huawei/Ascend310P 创建请求会返回暂不支持。",
             "requestBody": {"$ref": "#/components/requestBodies/DeployCreateEnvelope"},
             "responses": {"200": {"description": "创建成功"}},
         }

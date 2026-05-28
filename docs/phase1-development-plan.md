@@ -106,9 +106,9 @@ POST /api/deploy/queue
 POST /api/deploy/logs
 ```
 
-用途分别是集群查询、资源预检、创建部署、查询部署、释放部署、重启部署、部署列表、停止部署、资源不足排队和部署日志。
+用途分别是集群查询、资源预检、创建部署、查询部署、释放部署、重启部署、部署列表、停止部署、资源不足排队和部署 Pod 描述。
 
-当前历史后端已经具备前 7 个接口的主要能力；`stop`、`queue`、`logs` 需要一期补齐。
+当前后端已经具备除 `queue` 外的主要部署能力；`logs` 入口当前返回接近 `kubectl describe pod` 的纯文本排障信息。
 
 ### 3. NVIDIA 和 Huawei GPU 区分
 
@@ -323,9 +323,9 @@ POST /api/audits/export
 
 一期实现方式：
 
-- 实例日志读取 `/workspace/Alg/log/<deployment_name>`。
-- Pod 日志通过 PaaS / Kubernetes API 或 `kubectl logs` 查询。
-- 暂不做实时 WebSocket 日志。
+- `/api/deploy/logs` 保留历史接口名，但当前返回 Pod describe 风格的纯文本排障信息。
+- Pod 通过 `app=<deployment_name>` 查找，优先展示 Running Pod。
+- 暂不做实时 WebSocket 日志，也不保存容器 stdout 到数据库。
 
 操作日志表：
 

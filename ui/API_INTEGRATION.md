@@ -64,7 +64,8 @@ NVIDIA 示例：
   "content": {
     "devices": { "NVIDIA/GPU": 1 },
     "deployType": "NvidiaInfer",
-    "creator": "admin"
+    "creator": "admin",
+    "instance_name": "qwen2.5-72b-prod"
   }
 }
 ```
@@ -80,7 +81,8 @@ Ascend 示例：
   "content": {
     "devices": { "Huawei/Ascend310P": 1 },
     "deployType": "HuaweiInfer",
-    "creator": "admin"
+    "creator": "admin",
+    "instance_name": "ascend-test"
   }
 }
 ```
@@ -92,6 +94,7 @@ Ascend 示例：
 | `content.devices` | object | 是 | 资源类型到数量的映射 |
 | `content.deployType` | string | 是 | `NvidiaInfer` 或 `HuaweiInfer` |
 | `content.creator` | string | 是 | 创建人，后端也会兜底读取 Header |
+| `content.instance_name` | string | 否 | 实例展示名；后端会写入 K8s `labels.instance_name` 和 PaaS alias，缺省回退为 deployment_name |
 | `gpu_resource_name` | string | Ascend 必填 | K8s 资源名 |
 
 当前后端自动生成或模板固定的字段：
@@ -184,6 +187,8 @@ POST /api/deploy/release
 }
 ```
 
+响应成功后，后端会删除同名 Deployment / Service，并把本地 `deploy_instance.status` 更新为 `released`。实例列表会过滤 released 记录，不再展示已释放部署。
+
 ### 重启部署
 
 ```http
@@ -250,7 +255,7 @@ POST /api/deploy/queue
 | `priority` | string | `high` / `normal` / `low` |
 | `status` | string | `queued` / `scheduled` / `failed` |
 
-### 实例日志
+### 实例 Pod 描述
 
 ```http
 POST /api/deploy/logs
@@ -265,19 +270,24 @@ POST /api/deploy/logs
 }
 ```
 
-响应建议：
+当前成功响应为 `text/plain; charset=utf-8`，内容接近 `kubectl describe pod`，用于日志/排障弹窗展示。失败响应仍为部署类 JSON envelope。
 
-```json
-{
-  "content": [
-    { "time": "2026-05-18 09:15:00", "level": "INFO", "message": "Instance started successfully" }
-  ]
-}
+```text
+Name:             nvidia-cuda-xxxxxx-abcde
+Namespace:        algorithm
+Status:           Running
+Containers:
+  nvidia-cuda-xxxxxx:
+    Image:         nvidia/cuda:11.6.2-cudnn8-devel-ubuntu20.04_v1
+    State:         Running
+Events:
 ```
 
-## 6. 端口白名单接口
+前端请求该接口时不要使用 `response.json()` 解析成功响应，应使用 `response.text()`；页面展示建议使用 `<pre>` 或 `white-space: pre-wrap` 保留换行。
 
-端口白名单用于创建实例资源预检，避免 NodePort 冲突。前端已做本地唯一性提示，后端仍需做强校验：
+## 6. 封闭端口 / 端口避让接口
+
+封闭端口用于创建实例资源预检，避免 NodePort 冲突。前端已做本地唯一性提示，后端仍需做强校验：
 
 ```text
 端口需为 1-65535 的整数，且不能重复。
@@ -286,64 +296,55 @@ POST /api/deploy/logs
 ### 列表
 
 ```http
-POST /api/ports/allowlist/list
+GET /api/port-list/list
 ```
 
-请求：
-
-```json
-{
-  "msg_id": "ports-list-001",
-  "serial": "s-001",
-  "context": "list port allowlist",
-  "content": {}
-}
-```
-
-响应 `content`：
+响应：
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `id` | string | 记录 ID |
 | `port` | number | 端口号 |
-| `name` | string | 端口名称 / 用途 |
-| `creator` | string | 设置人员 |
 | `created_at` | string | 设置时间 |
+| `updated_at` | string | 更新时间 |
 | `remark` | string | 备注 |
 
 ### 新增
 
 ```http
-POST /api/ports/allowlist/create
+POST /api/port-list/add
 ```
 
 ```json
 {
-  "msg_id": "ports-create-001",
-  "serial": "s-001",
-  "context": "create port allowlist",
-  "content": {
-    "port": 50056,
-    "name": "web api",
-    "creator": "admin",
-    "remark": "debug allowlist"
-  }
+  "port": 50056,
+  "remark": "debug reserved port"
+}
+```
+
+### 更新
+
+```http
+PUT /api/port-list/update/{item_id}
+```
+
+```json
+{
+  "port": 50057,
+  "remark": "updated reserved port"
 }
 ```
 
 ### 删除
 
 ```http
-POST /api/ports/allowlist/delete
+DELETE /api/port-list/delete/{item_id}
 ```
 
-```json
-{
-  "msg_id": "ports-delete-001",
-  "serial": "s-001",
-  "context": "delete port allowlist",
-  "content": { "id": "2c8004b2", "port": 50056 }
-}
+### 端口避让快照
+
+```http
+GET /api/port-list/resolve
 ```
 
 ## 7. 告警接口
@@ -497,7 +498,7 @@ POST /api/audits/export
 2. 创建接口是否需要支持前端展示名称、任务优先级、队列状态。
 3. 资源不足时是返回 `can_create=false`，还是直接创建排队任务。
 4. 停止接口是否采用 `/api/deploy/stop`，或由释放/缩容接口承载。
-5. 日志接口是否采用 `/api/deploy/logs`，是否需要流式输出。
+5. `/api/deploy/logs` 当前已采用纯文本 Pod describe 输出，不做流式 stdout 日志。
 6. vGPU 最小 / 最大预测值是否由后端返回，目前前端按演示规则展示。
 7. 端口白名单是否按本文件 CRUD 契约提供。
 8. 告警与审计日志是否统一分页、排序与导出权限。

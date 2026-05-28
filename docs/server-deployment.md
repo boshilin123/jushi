@@ -248,6 +248,23 @@ SHOW TABLES;
 SELECT id, username, role, status FROM sys_user;
 ```
 
+部署相关表建议额外确认：
+
+```sql
+SELECT deployment_name, instance_name, creator, status, created_at
+FROM deploy_instance
+ORDER BY created_at DESC
+LIMIT 5;
+
+SHOW COLUMNS FROM alert_event;
+```
+
+注意：
+
+- `backend/db/init.sql` 只会在 MySQL 数据目录首次初始化时执行；单纯重建 `jushi-api` 或 `jushi-mysql` 容器不会重复执行初始化 SQL。
+- 当前释放部署为软删除：`deploy_instance.status` 会更新为 `released`，列表接口会过滤 released 记录。
+- 告警表的兼容字段由后端 `ensure_alert_schema()` 在访问告警接口时补齐，首次调用 `/api/alerts/list` 时会检查并补充 `instance_name`、`deployment_name`、`fingerprint` 等列。
+
 ## 10. 常见问题
 
 ### 10.1 Docker Hub 拉取超时

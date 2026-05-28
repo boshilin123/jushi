@@ -312,6 +312,7 @@ def _service_nodeports_with_retry(client: PaasClient, name: str, retries: int = 
 def _build_deployment(
     *,
     name: str,
+    instance_name: str,
     creator: str,
     client_ip: str,
     deploy_type: str,
@@ -321,6 +322,7 @@ def _build_deployment(
 ) -> dict:
     safe_creator = _safe_label_value(creator)
     safe_client_ip = _safe_shell_value(client_ip)
+    alias_name = str(instance_name or name).strip()
     created_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     gpu_count = str(device_request["requested"])
     resource_name = device_request["resource_name"]
@@ -358,7 +360,7 @@ def _build_deployment(
             "namespace": Config.DCE_NAMESPACE,
             "labels": {"app": name, "creator": safe_creator},
             "annotations": {
-                "kpanda.io/alias-name": f"{creator}/{client_ip}" if client_ip else creator,
+                "kpanda.io/alias-name": f"{alias_name}/{client_ip}" if client_ip else alias_name,
                 "createdAt": created_at,
                 "creatorIp": client_ip,
                 "deployType": deploy_type,
@@ -734,6 +736,7 @@ def create_default(payload: dict) -> tuple[dict, int]:
 
             deployment = _build_deployment(
                 name=name,
+                instance_name=str(content.get("instance_name") or "").strip() or name,
                 creator=creator,
                 client_ip=client_ip,
                 deploy_type=deploy_type,
@@ -1206,8 +1209,9 @@ def _format_list_created_at(value) -> str:
     return text.replace("T", " ").replace("Z", "")[:19]
 
 
-def _deployment_display_status(deployment: dict, record: dict | None = None) -> str:
+def _deployment_display_status(deployment: dict, record: dict | None = None, pods: list[dict] | None = None) -> str:
     local_status = str((record or {}).get("status") or "").lower()
+    pods = pods or []
     replicas = _parse_int_quantity(deployment.get("replicas"))
     available = _parse_int_quantity(deployment.get("available_replicas"))
     ready = _parse_int_quantity(deployment.get("ready_replicas"))
@@ -1221,6 +1225,8 @@ def _deployment_display_status(deployment: dict, record: dict | None = None) -> 
         return "已停止"
     if state == "running" or has_available_condition or (replicas > 0 and available >= replicas and ready >= replicas):
         return "已部署"
+    if any(pod.get("phase") == "Pending" for pod in pods) or (replicas > 0 and ready < replicas and available < replicas):
+        return "等待"
     return "异常"
 
 
@@ -1255,6 +1261,19 @@ def list_deployments(payload: dict) -> dict:
             for row in repository.list_deploy_instances()
             if row.get("deployment_name")
         }
+        pod_summaries = {}
+        pod_path = f"/clusters/{Config.DCE_CLUSTER}/namespaces/{Config.DCE_NAMESPACE}/pods"
+        pod_status, pod_result = client.request_with_status("GET", pod_path)
+        if pod_status == 200:
+            for pod in pod_items(pod_result):
+                if not isinstance(pod, dict):
+                    continue
+                labels = ((pod.get("metadata", {}) or {}).get("labels", {}) or {})
+                app_name = labels.get("app")
+                if not app_name:
+                    continue
+                pod_summaries.setdefault(app_name, []).append(summarize_pod(pod))
+
         items = []
         for raw_deployment in _deployment_items(deploy_result):
             if not isinstance(raw_deployment, dict):
@@ -1267,7 +1286,7 @@ def list_deployments(payload: dict) -> dict:
             items.append({
                 "instance_name": record.get("instance_name") or deployment_name,
                 "deployment_name": deployment_name,
-                "status": _deployment_display_status(deployment, record),
+                "status": _deployment_display_status(deployment, record, pod_summaries.get(deployment_name, [])),
                 "created_at": _format_list_created_at(deployment.get("created_at") or record.get("created_at")),
             })
 

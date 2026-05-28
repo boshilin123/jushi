@@ -649,6 +649,7 @@ NVIDIA 请求：
   - PaaS/Kubernetes 已存在 Service 的 `nodePort`。
   - 宿主机已绑定端口。
 - 创建成功后写入 `deploy_instance` 表，至少保存 `instance_name`、`deployment_name`、GPU 字段、`deploy_type`、`creator`、`status`、`node_ports`、`log_path`。其中 `instance_name` 是实例展示名称，`deployment_name` 是真实 Kubernetes/PaaS 工作负载名。
+- PaaS 工作负载别名写入 `kpanda.io/alias-name = instance_name/client_ip`，方便在 PaaS 平台和本系统列表中对应展示。
 
 响应：
 
@@ -906,7 +907,7 @@ POST /api/deploy/list
 
 - `instance_name`：实例展示名称，优先取本地 `deploy_instance.instance_name`；没有本地记录时回退为 `deployment_name`。
 - `deployment_name`：真实 Kubernetes Deployment 名称，也就是工作负载 ID。
-- `status`：由 PaaS Deployment 实时状态转换，副本正常可用显示为 `已部署`，副本数为 0 或本地状态为 stopped 显示为 `已停止`，其余启动失败/镜像拉取失败/未就绪等显示为 `异常`。
+- `status`：由 PaaS Deployment 和 Pod 实时状态转换，副本正常可用显示为 `已部署`，Pod Pending 或副本还在启动中显示为 `等待`，副本数为 0 或本地状态为 stopped 显示为 `已停止`，启动失败/镜像拉取失败等明确失败状态显示为 `异常`。
 - `created_at`：优先取 PaaS Deployment 注解或元数据创建时间，必要时回退本地记录创建时间。
 
 ### 5.8 停止部署

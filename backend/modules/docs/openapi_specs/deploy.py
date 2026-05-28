@@ -44,7 +44,7 @@ DEPLOY_PATHS = {
             "tags": ["Deploy"],
             "summary": "停止部署",
             "requestBody": {"$ref": "#/components/requestBodies/DeployStopEnvelope"},
-            "responses": {"501": {"description": "暂未实现"}},
+            "responses": {"200": {"description": "停止结果"}},
         }
     },
     "/api/deploy/logs": {
@@ -52,7 +52,7 @@ DEPLOY_PATHS = {
             "tags": ["Deploy"],
             "summary": "部署日志",
             "requestBody": {"$ref": "#/components/requestBodies/DeployLogsEnvelope"},
-            "responses": {"501": {"description": "暂未实现"}},
+            "responses": {"200": {"description": "部署日志"}},
         }
     },
     "/api/deploy/list": {

@@ -114,4 +114,34 @@ def list_deploy_instances():
 
 def update_deploy_status(name: str, status: str):
     # 更新部署实例状态，如 created、running、released、failed。
-    return {"deployment_name": name, "status": status}
+    if not name:
+        return {"deployment_name": name, "status": status, "affected_rows": 0}
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE deploy_instance
+                SET status = %s
+                WHERE deployment_name = %s
+                """,
+                (status, name),
+            )
+            affected_rows = cursor.rowcount
+    return {"deployment_name": name, "status": status, "affected_rows": affected_rows}
+
+
+def delete_deploy_instance(name: str) -> dict:
+    # 释放实例后删除本地记录，避免数据库长期保留已释放实例。
+    if not name:
+        return {"deployment_name": name, "affected_rows": 0}
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                DELETE FROM deploy_instance
+                WHERE deployment_name = %s
+                """,
+                (name,),
+            )
+            affected_rows = cursor.rowcount
+    return {"deployment_name": name, "affected_rows": affected_rows}

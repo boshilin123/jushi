@@ -761,7 +761,7 @@ POST /api/deploy/retrieve
 POST /api/deploy/release
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已实现。会删除同名 Service、Deployment，并删除本地 `deploy_instance` 记录。
 
 请求：
 
@@ -792,7 +792,10 @@ POST /api/deploy/release
     "status": "released",
     "deployment_delete": {},
     "service_delete": {},
-    "log_path": "/workspace/Alg/log/nvidia-cuda-xxxxxx"
+    "db_delete": {
+      "deployment_name": "nvidia-cuda-xxxxxx",
+      "affected_rows": 1
+    }
   }
 }
 ```
@@ -801,8 +804,8 @@ POST /api/deploy/release
 
 - 删除同名 Deployment 和 Service。
 - Service 不存在可视为释放成功，保持幂等。
-- 成功后更新 `deploy_instance.status = released`。
-- 不自动删除日志目录，只回传 `log_path`。
+- 成功后删除 `deploy_instance` 中的对应记录，不再保留 released 状态数据。
+- 日志不保存到数据库；释放后若 Deployment/Pod 已删除，日志接口不再能通过集群实时读取该实例日志。
 
 ### 5.6 重启部署
 
@@ -810,7 +813,7 @@ POST /api/deploy/release
 POST /api/deploy/reset
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已实现。调用 PaaS Deployment restart 动作，不改动 Service 和端口。
 
 请求：
 
@@ -904,9 +907,7 @@ POST /api/deploy/list
 POST /api/deploy/stop
 ```
 
-当前状态：后端已建路由并纳入部署类 envelope 校验，业务能力暂未实现，当前返回 `501`。
-
-优先级：低于 `check-available`、`create-default`、`retrieve`、`list`、`release`、`reset`。
+当前状态：后端已实现。通过 PaaS/Kubernetes scale 能力把 Deployment 副本数缩为 `0`，并更新本地实例状态为 `stopped`。
 
 请求：
 
@@ -928,17 +929,19 @@ POST /api/deploy/stop
   "msg_id": "stop-001_Resp",
   "serial": "stop-serial-001",
   "context": "stop deploy",
-  "status": -1,
-  "http_status_code": 501,
-  "msg": "停止部署暂未实现",
-  "is_success": false,
+  "status": 0,
+  "http_status_code": 200,
+  "msg": "OK",
+  "is_success": true,
   "content": {
-    "deployment_name": "nvidia-cuda-xxxxxx"
+    "deployment_name": "nvidia-cuda-xxxxxx",
+    "status": "stopped",
+    "response": {}
   }
 }
 ```
 
-说明：停止语义需要先确认 PaaS 支持方式。可选方案包括缩容副本数为 `0`、暂停业务流量、或仅更新本地状态。未确认前不要实现为删除资源。
+说明：停止不会删除 Deployment / Service，只把 Deployment 副本数缩为 `0`。列表接口会把这类实例展示为 `已停止`。
 
 ### 5.9 资源不足排队
 
@@ -985,9 +988,7 @@ POST /api/deploy/queue
 POST /api/deploy/logs
 ```
 
-当前状态：后端已建路由并纳入部署类 envelope 校验，业务能力暂未实现，当前返回 `501`。
-
-优先级：低于核心部署生命周期。可以在 `release/reset` 可用后补齐。
+当前状态：后端已实现。前端只需要传 Deployment 名称，后端会查询对应 Pod 并读取 Pod 日志。
 
 请求：
 
@@ -997,7 +998,8 @@ POST /api/deploy/logs
   "serial": "logs-serial-001",
   "context": "deploy logs",
   "content": {
-    "name": "nvidia-cuda-xxxxxx"
+    "name": "nvidia-cuda-xxxxxx",
+    "tail_lines": 200
   }
 }
 ```
@@ -1009,21 +1011,26 @@ POST /api/deploy/logs
   "msg_id": "logs-001_Resp",
   "serial": "logs-serial-001",
   "context": "deploy logs",
-  "status": -1,
-  "http_status_code": 501,
-  "msg": "部署日志暂未实现",
-  "is_success": false,
+  "status": 0,
+  "http_status_code": 200,
+  "msg": "OK",
+  "is_success": true,
   "content": {
     "deployment_name": "nvidia-cuda-xxxxxx",
-    "lines": []
+    "pod_name": "nvidia-cuda-xxxxxx-abcde",
+    "tail_lines": 200,
+    "lines": [
+      "service started"
+    ]
   }
 }
 ```
 
-实现建议：
+实现说明：
 
-- 实例日志优先读取 `/workspace/Alg/log/<deployment_name>`。
-- Pod 运行日志优先复用 `/api/pods/logs` 或 Kubernetes logs 能力。
+- 日志不会保存到数据库，也不读取本地 `deploy_instance`。
+- 后端按 `app=<deployment_name>` 查询 Deployment 对应 Pod，优先读取 Running Pod。
+- 再调用 PaaS/Kubernetes Pod log 能力获取最近 `tail_lines` 行。
 - 一期只返回最近 N 行，不做 WebSocket 或实时流。
 
 ## 6. 封闭端口 / 端口避让接口

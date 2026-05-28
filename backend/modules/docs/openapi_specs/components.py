@@ -287,7 +287,7 @@ COMPONENTS = {
                         "msg_id": "logs-001",
                         "serial": "logs-serial-001",
                         "context": "deploy logs",
-                        "content": {"name": "nvidia-cuda-xxxxxx"},
+                        "content": {"name": "nvidia-cuda-xxxxxx", "tail_lines": 200},
                     },
                 }
             },

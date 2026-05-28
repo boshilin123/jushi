@@ -5,6 +5,7 @@ import re
 import socket
 import time
 import uuid
+from urllib.parse import urlencode
 
 from flask import g, request
 
@@ -918,14 +919,117 @@ def retrieve(payload: dict) -> tuple[dict, int]:
         return _response_envelope(payload, {"deployment_name": name, "error": str(exc)}, 500, msg, -1), 500
 
 
+def _deploy_name_or_error(payload: dict) -> tuple[str, dict | None]:
+    name = get_deploy_name(payload)
+    if name:
+        return name, None
+    msg = "缺少必填字段：content.name"
+    return "", _response_envelope(payload, {"error": msg}, 400, msg, -1)
+
+
+def _deploy_client_or_error(payload: dict) -> tuple[PaasClient | None, dict | None]:
+    if not Config.DCE_API_BASE:
+        msg = "PaaS 地址未配置"
+        return None, _response_envelope(payload, {"error": "DCE_API_BASE is not configured"}, 500, msg, -1)
+    if not Config.DCE_TOKEN:
+        msg = "PaaS token 未配置"
+        return None, _response_envelope(payload, {"error": "DCE_TOKEN is not configured"}, 500, msg, -1)
+    return PaasClient(Config.DCE_API_BASE, Config.DCE_TOKEN), None
+
+
+def _delete_paas_resource(client: PaasClient, path: str) -> tuple[dict, bool]:
+    status_code, result = client.request_with_status("DELETE", path)
+    ok = 200 <= status_code < 300 or status_code == 404
+    return {
+        "http_status_code": status_code,
+        "is_success": ok,
+        "not_found_ignored": status_code == 404,
+        "response": result,
+    }, ok
+
+
+def _scale_deployment(client: PaasClient, name: str, replicas: int) -> tuple[int, dict]:
+    # PaaS/DCE 优先使用 Kubernetes scale 子资源；若环境不支持，再退回 patch deployment spec。
+    scale_path = f"/clusters/{Config.DCE_CLUSTER}/namespaces/{Config.DCE_NAMESPACE}/deployments/{name}/scale"
+    scale_body = {"spec": {"replicas": replicas}}
+    status_code, result = client.request_with_status("PATCH", scale_path, json_body=scale_body)
+    if 200 <= status_code < 300:
+        return status_code, result
+
+    patch_path = f"/clusters/{Config.DCE_CLUSTER}/namespaces/{Config.DCE_NAMESPACE}/deployments/{name}"
+    patch_body = {"spec": {"replicas": replicas}}
+    fallback_status, fallback_result = client.request_with_status("PATCH", patch_path, json_body=patch_body)
+    if 200 <= fallback_status < 300:
+        return fallback_status, fallback_result
+
+    return fallback_status, {
+        "scale": {"http_status_code": status_code, "response": result},
+        "patch": {"http_status_code": fallback_status, "response": fallback_result},
+    }
+
+
+def _pod_log_lines(result) -> list[str]:
+    if isinstance(result, list):
+        return [str(item) for item in result]
+    if not isinstance(result, dict):
+        text = str(result or "")
+        return text.splitlines() if text else []
+
+    for key in ("lines", "logs", "items"):
+        value = result.get(key)
+        if isinstance(value, list):
+            return [str(item) for item in value]
+
+    for key in ("log", "content", "raw"):
+        value = result.get(key)
+        if isinstance(value, str):
+            return value.splitlines()
+    return []
+
+
 def release(payload: dict) -> dict:
     valid, message = validate_deploy_envelope(payload, "release")
     if not valid:
         return _response_envelope(payload, {"error": message}, 400, message, -1)
 
-    # TODO: 调用 PaaS 删除 Deployment 和 Service；车间模式没有 Service 时允许 404。
-    name = get_deploy_name(payload)
-    return repository.update_deploy_status(name, "released")
+    name, error_response = _deploy_name_or_error(payload)
+    if error_response:
+        return error_response
+    client, error_response = _deploy_client_or_error(payload)
+    if error_response:
+        return error_response
+
+    try:
+        service_path = f"/clusters/{Config.DCE_CLUSTER}/namespaces/{Config.DCE_NAMESPACE}/services/{name}"
+        deployment_path = f"/clusters/{Config.DCE_CLUSTER}/namespaces/{Config.DCE_NAMESPACE}/deployments/{name}"
+        service_delete, service_ok = _delete_paas_resource(client, service_path)
+        deployment_delete, deployment_ok = _delete_paas_resource(client, deployment_path)
+        if not service_ok or not deployment_ok:
+            msg = "释放部署失败"
+            return _response_envelope(
+                payload,
+                {
+                    "deployment_name": name,
+                    "service_delete": service_delete,
+                    "deployment_delete": deployment_delete,
+                },
+                502,
+                msg,
+                -1,
+            )
+
+        delete_result = repository.delete_deploy_instance(name)
+        content = {
+            "deployment_name": name,
+            "status": "released",
+            "deployment_delete": deployment_delete,
+            "service_delete": service_delete,
+            "db_delete": delete_result,
+        }
+        return _response_envelope(payload, content, 200, "OK", 0)
+    except Exception as exc:
+        msg = "释放部署异常"
+        return _response_envelope(payload, {"deployment_name": name, "error": str(exc)}, 500, msg, -1)
 
 
 def reset(payload: dict) -> dict:
@@ -933,9 +1037,34 @@ def reset(payload: dict) -> dict:
     if not valid:
         return _response_envelope(payload, {"error": message}, 400, message, -1)
 
-    # TODO: 调用 PaaS/Kubernetes restart 能力，保持和旧脚本 /restart 路径一致。
-    name = get_deploy_name(payload)
-    return {"deployment_name": name, "is_success": True}
+    name, error_response = _deploy_name_or_error(payload)
+    if error_response:
+        return error_response
+    client, error_response = _deploy_client_or_error(payload)
+    if error_response:
+        return error_response
+
+    # 重启使用 PaaS Deployment restart 动作，不改变实例配置和 Service 暴露端口。
+    restart_path = f"/clusters/{Config.DCE_CLUSTER}/namespaces/{Config.DCE_NAMESPACE}/deployments/{name}:restart"
+    status_code, result = client.request_with_status("POST", restart_path)
+    if not 200 <= status_code < 300:
+        msg = "重启部署失败"
+        return _response_envelope(
+            payload,
+            {"deployment_name": name, "response": result},
+            status_code,
+            msg,
+            -1,
+        )
+
+    update_result = repository.update_deploy_status(name, "running")
+    return _response_envelope(
+        payload,
+        {"deployment_name": name, "status": "running", "response": result, "db_update": update_result},
+        200,
+        "OK",
+        0,
+    )
 
 
 def stop(payload: dict) -> dict:
@@ -943,11 +1072,32 @@ def stop(payload: dict) -> dict:
     if not valid:
         return _response_envelope(payload, {"error": message}, 400, message, -1)
 
-    name = get_deploy_name(payload)
-    if not name:
-        msg = "缺少必填字段：content.name"
-        return _response_envelope(payload, {"error": msg}, 400, msg, -1)
-    return _response_envelope(payload, {"deployment_name": name}, 501, "停止部署暂未实现", -1)
+    name, error_response = _deploy_name_or_error(payload)
+    if error_response:
+        return error_response
+    client, error_response = _deploy_client_or_error(payload)
+    if error_response:
+        return error_response
+
+    status_code, result = _scale_deployment(client, name, 0)
+    if not 200 <= status_code < 300:
+        msg = "停止部署失败"
+        return _response_envelope(
+            payload,
+            {"deployment_name": name, "response": result},
+            status_code,
+            msg,
+            -1,
+        )
+
+    update_result = repository.update_deploy_status(name, "stopped")
+    return _response_envelope(
+        payload,
+        {"deployment_name": name, "status": "stopped", "response": result, "db_update": update_result},
+        200,
+        "OK",
+        0,
+    )
 
 
 def logs(payload: dict) -> dict:
@@ -955,11 +1105,62 @@ def logs(payload: dict) -> dict:
     if not valid:
         return _response_envelope(payload, {"error": message}, 400, message, -1)
 
-    name = get_deploy_name(payload)
-    if not name:
-        msg = "缺少必填字段：content.name"
-        return _response_envelope(payload, {"error": msg}, 400, msg, -1)
-    return _response_envelope(payload, {"deployment_name": name, "lines": []}, 501, "部署日志暂未实现", -1)
+    name, error_response = _deploy_name_or_error(payload)
+    if error_response:
+        return error_response
+    client, error_response = _deploy_client_or_error(payload)
+    if error_response:
+        return error_response
+
+    content = payload.get("content", {}) or {}
+    tail_lines = _parse_int_quantity(content.get("tail_lines") or content.get("tailLines") or 200)
+    tail_lines = max(1, min(tail_lines, 1000))
+
+    # 前端只传 deployment_name；后端通过 app label 找到对应 Pod 后直接读取 Pod 日志。
+    pod_path = deployment_pod_path(Config.DCE_CLUSTER, Config.DCE_NAMESPACE, name)
+    pod_status, pod_result = client.request_with_status("GET", pod_path)
+    if pod_status != 200:
+        msg = "查询部署 Pod 失败"
+        return _response_envelope(
+            payload,
+            {"deployment_name": name, "response": pod_result},
+            pod_status,
+            msg,
+            -1,
+        )
+
+    pods = [
+        summarize_pod(pod)
+        for pod in pod_items(pod_result)
+        if isinstance(pod, dict)
+    ]
+    pod = next((item for item in pods if item.get("phase") == "Running"), None) or (pods[0] if pods else {})
+    pod_name = pod.get("pod_name")
+    if not pod_name:
+        msg = "部署暂无可读取日志的 Pod"
+        return _response_envelope(payload, {"deployment_name": name, "lines": []}, 404, msg, -1)
+
+    log_query = urlencode({"tailLines": tail_lines})
+    log_path = f"/clusters/{Config.DCE_CLUSTER}/namespaces/{Config.DCE_NAMESPACE}/pods/{pod_name}/log?{log_query}"
+    log_status, log_result = client.request_with_status("GET", log_path)
+    if not 200 <= log_status < 300:
+        msg = "部署日志查询失败"
+        return _response_envelope(
+            payload,
+            {"deployment_name": name, "pod_name": pod_name, "response": log_result},
+            log_status,
+            msg,
+            -1,
+        )
+
+    lines = _pod_log_lines(log_result)
+    return _response_envelope(
+        payload,
+        {"deployment_name": name, "pod_name": pod_name, "tail_lines": tail_lines, "lines": lines},
+        200,
+        "OK",
+        0,
+    )
 
 
 def _format_list_created_at(value) -> str:

@@ -99,7 +99,7 @@ def summarize_deployment(deployment: dict) -> dict:
         "deployType": annotations.get("deployType"),
         "workshop_mode": annotations.get("workshopMode") == "true",
         "image": main_container.get("image"),
-        "replicas": status.get("replicas", 0),
+        "replicas": status.get("replicas", spec.get("replicas", 0)),
         "ready_replicas": status.get("readyReplicas", 0),
         "available_replicas": status.get("availableReplicas", 0),
         "state": status.get("state"),

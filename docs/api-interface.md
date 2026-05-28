@@ -895,7 +895,7 @@ POST /api/deploy/list
 
 - `instance_name`：实例展示名称，优先取本地 `deploy_instance.instance_name`；没有本地记录时回退为 `deployment_name`。
 - `deployment_name`：真实 Kubernetes Deployment 名称，也就是工作负载 ID。
-- `status`：由 PaaS Deployment 实时状态转换，Running/Available 显示为 `已部署`，其他状态显示为 `异常`。
+- `status`：由 PaaS Deployment 实时状态转换，副本正常可用显示为 `已部署`，副本数为 0 或本地状态为 stopped 显示为 `已停止`，其余启动失败/镜像拉取失败/未就绪等显示为 `异常`。
 - `created_at`：优先取 PaaS Deployment 注解或元数据创建时间，必要时回退本地记录创建时间。
 
 ### 5.8 停止部署

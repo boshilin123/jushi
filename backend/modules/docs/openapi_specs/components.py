@@ -149,15 +149,35 @@ COMPONENTS = {
             "content": {
                 "application/json": {
                     "schema": {"$ref": "#/components/schemas/DeployEnvelope"},
-                    "example": {
-                        "msg_id": "check-001",
-                        "serial": "check-serial-001",
-                        "context": "check deploy available",
-                        "content": {
-                            "devices": {"NVIDIA/GPU": 1},
-                            "deployType": "NvidiaInfer",
-                            "creator": "admin",
-                            "instance_name": "qwen2.5-72b-prod",
+                    "examples": {
+                        "nvidia": {
+                            "summary": "NVIDIA 资源预检",
+                            "value": {
+                                "msg_id": "check-001",
+                                "serial": "check-serial-001",
+                                "context": "check deploy available",
+                                "content": {
+                                    "devices": {"NVIDIA/GPU": 1},
+                                    "deployType": "NvidiaInfer",
+                                    "creator": "admin",
+                                    "instance_name": "qwen2.5-72b-prod",
+                                },
+                            },
+                        },
+                        "huawei": {
+                            "summary": "Huawei Ascend 资源预检",
+                            "value": {
+                                "msg_id": "check-huawei-001",
+                                "serial": "check-serial-001",
+                                "context": "check deploy available",
+                                "gpu_resource_name": "huawei.com/Ascend310P",
+                                "content": {
+                                    "devices": {"Huawei/Ascend310P": 1},
+                                    "deployType": "HuaweiInfer",
+                                    "creator": "admin",
+                                    "instance_name": "ascend-test",
+                                },
+                            },
                         },
                     },
                 }
@@ -168,14 +188,35 @@ COMPONENTS = {
             "content": {
                 "application/json": {
                     "schema": {"$ref": "#/components/schemas/DeployEnvelope"},
-                    "example": {
-                        "msg_id": "create-001",
-                        "serial": "create-serial-001",
-                        "context": "create inference instance",
-                        "content": {
-                            "devices": {"NVIDIA/GPU": 1},
-                            "deployType": "NvidiaInfer",
-                            "creator": "admin",
+                    "examples": {
+                        "nvidia": {
+                            "summary": "NVIDIA 创建推理部署",
+                            "value": {
+                                "msg_id": "create-001",
+                                "serial": "create-serial-001",
+                                "context": "create inference instance",
+                                "content": {
+                                    "devices": {"NVIDIA/GPU": 1},
+                                    "deployType": "NvidiaInfer",
+                                    "creator": "admin",
+                                    "instance_name": "qwen2.5-72b-prod",
+                                },
+                            },
+                        },
+                        "huawei": {
+                            "summary": "Huawei Ascend 创建推理部署",
+                            "value": {
+                                "msg_id": "create-huawei-001",
+                                "serial": "create-serial-001",
+                                "context": "create inference instance",
+                                "gpu_resource_name": "huawei.com/Ascend310P",
+                                "content": {
+                                    "devices": {"Huawei/Ascend310P": 1},
+                                    "deployType": "HuaweiInfer",
+                                    "creator": "admin",
+                                    "instance_name": "ascend-test",
+                                },
+                            },
                         },
                     },
                 }

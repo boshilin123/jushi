@@ -971,7 +971,8 @@ def _format_list_created_at(value) -> str:
     return text.replace("T", " ").replace("Z", "")[:19]
 
 
-def _deployment_display_status(deployment: dict) -> str:
+def _deployment_display_status(deployment: dict, record: dict | None = None) -> str:
+    local_status = str((record or {}).get("status") or "").lower()
     replicas = _parse_int_quantity(deployment.get("replicas"))
     available = _parse_int_quantity(deployment.get("available_replicas"))
     ready = _parse_int_quantity(deployment.get("ready_replicas"))
@@ -981,6 +982,8 @@ def _deployment_display_status(deployment: dict) -> str:
         for item in deployment.get("conditions", []) or []
     )
 
+    if local_status == "stopped" or (replicas == 0 and available == 0 and ready == 0):
+        return "已停止"
     if state == "running" or has_available_condition or (replicas > 0 and available >= replicas and ready >= replicas):
         return "已部署"
     return "异常"
@@ -1029,7 +1032,7 @@ def list_deployments(payload: dict) -> dict:
             items.append({
                 "instance_name": record.get("instance_name") or deployment_name,
                 "deployment_name": deployment_name,
-                "status": _deployment_display_status(deployment),
+                "status": _deployment_display_status(deployment, record),
                 "created_at": _format_list_created_at(deployment.get("created_at") or record.get("created_at")),
             })
 

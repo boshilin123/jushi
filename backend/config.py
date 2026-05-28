@@ -15,3 +15,6 @@ class Config:
     DCE_CLUSTER = os.getenv("DCE_CLUSTER", "default")
     DCE_NAMESPACE = os.getenv("DCE_NAMESPACE", "default")
     DCE_TOKEN = (os.getenv("DCE_TOKEN") or "").strip('"')
+
+    K8S_API_BASE = os.getenv("K8S_API_BASE", "")
+    K8S_TOKEN = (os.getenv("K8S_TOKEN") or "").strip('"')

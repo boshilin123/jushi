@@ -916,7 +916,7 @@ POST /api/deploy/list
 POST /api/deploy/stop
 ```
 
-当前状态：后端已实现。通过 PaaS/Kubernetes scale 能力把 Deployment 副本数缩为 `0`，并更新本地实例状态为 `stopped`。
+当前状态：后端已实现。直接调用 Kubernetes API 把 Deployment 副本数缩为 `0`，并更新本地实例状态为 `stopped`。
 
 请求：
 
@@ -950,7 +950,7 @@ POST /api/deploy/stop
 }
 ```
 
-说明：停止不会删除 Deployment / Service，只把 Deployment 副本数缩为 `0`。列表接口会把这类实例展示为 `已停止`。
+说明：停止不会删除 Deployment / Service，只通过 Kubernetes 原生 PATCH 把 Deployment 副本数缩为 `0`。列表接口会把这类实例展示为 `已停止`。
 
 ### 5.9 资源不足排队
 
@@ -997,7 +997,7 @@ POST /api/deploy/queue
 POST /api/deploy/logs
 ```
 
-当前状态：后端已实现。前端只需要传 Deployment 名称，后端会查询对应 Pod 并读取 Pod 日志。
+当前状态：后端已实现。前端只需要传 Deployment 名称，后端会通过 Kubernetes API 查询对应 Pod 并读取 Pod 日志。
 
 请求：
 
@@ -1038,8 +1038,8 @@ POST /api/deploy/logs
 实现说明：
 
 - 日志不会保存到数据库，也不读取本地 `deploy_instance`。
-- 后端按 `app=<deployment_name>` 查询 Deployment 对应 Pod，优先读取 Running Pod。
-- 再调用 PaaS/Kubernetes Pod log 能力获取最近 `tail_lines` 行。
+- 后端按 `app=<deployment_name>` 通过 Kubernetes API 查询 Deployment 对应 Pod，优先读取 Running Pod。
+- 再调用 Kubernetes Pod log API 获取最近 `tail_lines` 行。
 - 一期只返回最近 N 行，不做 WebSocket 或实时流。
 
 ## 6. 封闭端口 / 端口避让接口

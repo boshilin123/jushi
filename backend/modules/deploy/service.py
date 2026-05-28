@@ -5,7 +5,6 @@ import re
 import socket
 import time
 import uuid
-from urllib.parse import urlencode
 
 from flask import g, request
 
@@ -27,10 +26,12 @@ from .schema import get_deploy_name, validate_create_payload, validate_deploy_en
 try:
     from backend.config import Config
     from backend.services.paas_client import PaasClient
+    from backend.services.k8s_client import K8sClient
     from backend.modules.ports.repository import resolve_blocked_ports
 except ModuleNotFoundError:
     from config import Config
     from services.paas_client import PaasClient
+    from services.k8s_client import K8sClient
     from modules.ports.repository import resolve_blocked_ports
 
 
@@ -940,6 +941,17 @@ def _deploy_client_or_error(payload: dict) -> tuple[PaasClient | None, dict | No
     return PaasClient(Config.DCE_API_BASE, Config.DCE_TOKEN), None
 
 
+def _k8s_client_or_error(payload: dict) -> tuple[K8sClient | None, dict | None]:
+    client = K8sClient.from_config(Config)
+    if not client.api_base:
+        msg = "Kubernetes API 地址未配置"
+        return None, _response_envelope(payload, {"error": "K8S_API_BASE is not configured"}, 500, msg, -1)
+    if not client.token:
+        msg = "Kubernetes token 未配置"
+        return None, _response_envelope(payload, {"error": "K8S_TOKEN is not configured"}, 500, msg, -1)
+    return client, None
+
+
 def _delete_paas_resource(client: PaasClient, path: str) -> tuple[dict, bool]:
     status_code, result = client.request_with_status("DELETE", path)
     ok = 200 <= status_code < 300 or status_code == 404
@@ -1112,11 +1124,12 @@ def stop(payload: dict) -> dict:
     name, error_response = _deploy_name_or_error(payload)
     if error_response:
         return error_response
-    client, error_response = _deploy_client_or_error(payload)
+    client, error_response = _k8s_client_or_error(payload)
     if error_response:
         return error_response
 
-    status_code, result = _scale_deployment(client, name, 0)
+    # 停止部署直接走 Kubernetes API 缩容到 0，避免 PaaS scale/patch 包装格式不兼容。
+    status_code, result = client.patch_deployment_replicas(Config.DCE_NAMESPACE, name, 0)
     if not 200 <= status_code < 300:
         msg = "停止部署失败"
         return _response_envelope(
@@ -1145,7 +1158,7 @@ def logs(payload: dict) -> dict:
     name, error_response = _deploy_name_or_error(payload)
     if error_response:
         return error_response
-    client, error_response = _deploy_client_or_error(payload)
+    client, error_response = _k8s_client_or_error(payload)
     if error_response:
         return error_response
 
@@ -1153,9 +1166,8 @@ def logs(payload: dict) -> dict:
     tail_lines = _parse_int_quantity(content.get("tail_lines") or content.get("tailLines") or 200)
     tail_lines = max(1, min(tail_lines, 1000))
 
-    # 前端只传 deployment_name；后端通过 app label 找到对应 Pod 后直接读取 Pod 日志。
-    pod_path = deployment_pod_path(Config.DCE_CLUSTER, Config.DCE_NAMESPACE, name)
-    pod_status, pod_result = client.request_with_status("GET", pod_path)
+    # 前端只传 deployment_name；后端通过 Kubernetes app label 找到对应 Pod 后直接读取 Pod 日志。
+    pod_status, pod_result = client.list_pods_by_app(Config.DCE_NAMESPACE, name)
     if pod_status != 200:
         msg = "查询部署 Pod 失败"
         return _response_envelope(
@@ -1177,9 +1189,7 @@ def logs(payload: dict) -> dict:
         msg = "部署暂无可读取日志的 Pod"
         return _response_envelope(payload, {"deployment_name": name, "lines": []}, 404, msg, -1)
 
-    log_query = urlencode({"tailLines": tail_lines})
-    log_path = f"/clusters/{Config.DCE_CLUSTER}/namespaces/{Config.DCE_NAMESPACE}/pods/{pod_name}/log?{log_query}"
-    log_status, log_result = client.request_with_status("GET", log_path)
+    log_status, log_result = client.pod_logs(Config.DCE_NAMESPACE, pod_name, tail_lines)
     if not 200 <= log_status < 300:
         msg = "部署日志查询失败"
         return _response_envelope(

@@ -3,7 +3,7 @@ from . import repository
 
 def list_alerts(query: dict) -> dict:
     # 告警列表业务，后续加入筛选、分页和排序。
-    return {"items": repository.list_alerts(query)}
+    return {"is_success": True, **repository.list_alerts(query)}
 
 
 def create_alert(payload: dict) -> dict:

@@ -52,9 +52,31 @@ class K8sClient:
             headers={"Content-Type": "application/merge-patch+json"},
         )
 
+    def list_pods(self, namespace: str, label_selector: str | None = None):
+        query = {}
+        if label_selector:
+            query["labelSelector"] = label_selector
+        suffix = f"?{urlencode(query)}" if query else ""
+        path = f"/api/v1/namespaces/{namespace}/pods{suffix}"
+        return self._request("GET", path)
+
     def list_pods_by_app(self, namespace: str, app_name: str):
-        query = urlencode({"labelSelector": f"app={app_name}"})
-        path = f"/api/v1/namespaces/{namespace}/pods?{query}"
+        return self.list_pods(namespace, label_selector=f"app={app_name}")
+
+    def read_pod(self, namespace: str, pod_name: str):
+        path = f"/api/v1/namespaces/{namespace}/pods/{pod_name}"
+        return self._request("GET", path)
+
+    def delete_pod(self, namespace: str, pod_name: str):
+        path = f"/api/v1/namespaces/{namespace}/pods/{pod_name}"
+        return self._request("DELETE", path)
+
+    def list_events(self, namespace: str, pod_name: str | None = None):
+        query = {}
+        if pod_name:
+            query["fieldSelector"] = f"involvedObject.name={pod_name}"
+        suffix = f"?{urlencode(query)}" if query else ""
+        path = f"/api/v1/namespaces/{namespace}/events{suffix}"
         return self._request("GET", path)
 
     def pod_logs(self, namespace: str, pod_name: str, tail_lines: int = 200):

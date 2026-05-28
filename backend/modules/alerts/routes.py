@@ -1,7 +1,7 @@
 from flask import Blueprint, jsonify, request
 
 from . import service
-from .schema import normalize_alert_action, normalize_alert_query
+from .schema import normalize_alert_action, normalize_alert_create, normalize_alert_query
 
 
 alerts_bp = Blueprint("alerts", __name__)
@@ -18,7 +18,7 @@ def list_alerts():
 def create_alert():
     # 创建告警事件，主要供资源不足、Pod 异常等后端流程写入。
     payload = request.get_json(silent=True) or {}
-    return jsonify(service.create_alert(payload))
+    return jsonify(service.create_alert(normalize_alert_create(payload)))
 
 
 @alerts_bp.post("/resolve")

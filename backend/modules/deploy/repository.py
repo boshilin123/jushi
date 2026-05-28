@@ -88,7 +88,7 @@ def _format_datetime(value):
 
 
 def list_deploy_instances():
-    # 查询本系统创建记录，只提供业务侧别名；实时状态仍以 PaaS Deployment 为准。
+    # 查询本系统创建记录，只提供业务侧别名；已释放实例默认不再出现在实例列表。
     with get_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute("SHOW COLUMNS FROM deploy_instance LIKE 'instance_name'")
@@ -102,6 +102,7 @@ def list_deploy_instances():
                     status,
                     created_at
                 FROM deploy_instance
+                WHERE status <> 'released'
                 ORDER BY created_at DESC
                 """
             )
@@ -131,14 +132,15 @@ def update_deploy_status(name: str, status: str):
 
 
 def delete_deploy_instance(name: str) -> dict:
-    # 释放实例后删除本地记录，避免数据库长期保留已释放实例。
+    # 释放实例后软删除本地记录，保留审计线索；列表查询会过滤 released 状态。
     if not name:
         return {"deployment_name": name, "affected_rows": 0}
     with get_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute(
                 """
-                DELETE FROM deploy_instance
+                UPDATE deploy_instance
+                SET status = 'released'
                 WHERE deployment_name = %s
                 """,
                 (name,),

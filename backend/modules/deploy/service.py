@@ -1002,6 +1002,27 @@ def _pod_log_lines(result) -> list[str]:
     return []
 
 
+def _pod_event_items(result) -> list[dict]:
+    if not isinstance(result, dict):
+        return []
+    events = []
+    for item in result.get("items", []) or []:
+        if not isinstance(item, dict):
+            continue
+        events.append(
+            {
+                "type": item.get("type"),
+                "reason": item.get("reason"),
+                "message": item.get("message"),
+                "source": (item.get("source") or {}).get("component") or item.get("reportingComponent"),
+                "first_timestamp": item.get("firstTimestamp") or item.get("eventTime"),
+                "last_timestamp": item.get("lastTimestamp") or item.get("eventTime"),
+                "count": item.get("count"),
+            }
+        )
+    return events
+
+
 def _pod_delete_targets(pods: list[dict]) -> list[dict]:
     running_pods = [pod for pod in pods if pod.get("phase") == "Running"]
     return running_pods or pods
@@ -1038,13 +1059,13 @@ def release(payload: dict) -> dict:
                 -1,
             )
 
-        delete_result = repository.delete_deploy_instance(name)
+        update_result = repository.delete_deploy_instance(name)
         content = {
             "deployment_name": name,
             "status": "released",
             "deployment_delete": deployment_delete,
             "service_delete": service_delete,
-            "db_delete": delete_result,
+            "db_update": update_result,
         }
         return _response_envelope(payload, content, 200, "OK", 0)
     except Exception as exc:
@@ -1201,9 +1222,19 @@ def logs(payload: dict) -> dict:
         )
 
     lines = _pod_log_lines(log_result)
+    event_status, event_result = client.list_events(Config.DCE_NAMESPACE, pod_name)
+    events = _pod_event_items(event_result) if 200 <= event_status < 300 else []
+    event_error = None if 200 <= event_status < 300 else {"status": event_status, "response": event_result}
     return _response_envelope(
         payload,
-        {"deployment_name": name, "pod_name": pod_name, "tail_lines": tail_lines, "lines": lines},
+        {
+            "deployment_name": name,
+            "pod_name": pod_name,
+            "tail_lines": tail_lines,
+            "lines": lines,
+            "events": events,
+            "event_error": event_error,
+        },
         200,
         "OK",
         0,

@@ -814,7 +814,14 @@ POST /api/deploy/release
 POST /api/deploy/reset
 ```
 
-当前状态：后端已实现。按 Deployment 查询关联 Pod，删除旧 Pod 后由 Deployment 控制器自动拉起新 Pod；不改动 Service 和端口。
+当前状态：后端已实现运行中实例重启。按 Deployment 查询关联 Pod，删除旧 Pod 后由 Deployment 控制器自动拉起新 Pod；不改动 Service 和端口。
+
+已停止实例说明：
+
+- `stop` 会把 Deployment `spec.replicas` 缩为 `0`，此时集群内没有可删除的 Pod。
+- `reset` 保持原有语义，只处理运行中实例重启，不负责恢复已停止实例。
+- 已停止实例再次调用 reset 时，如果没有 Pod 可删除，返回“暂无可重启的 Pod”属于预期行为。
+- PaaS 报 `can not start a workload which has no historical replicas` 也符合当前平台语义：已停止工作负载没有可用于恢复的历史副本数。
 
 请求：
 
@@ -859,6 +866,7 @@ POST /api/deploy/reset
 - 不调用 Deployment rollout restart，避免 GPU 单副本场景先创建新 Pod 导致 `Insufficient nvidia.com/gpu`。
 - 按 `app=<deployment_name>` 查询 Pod，优先删除 Running Pod；如果没有 Running Pod，则删除查询到的 Pod。
 - 删除 Pod 后由 Deployment/ReplicaSet 自动重建 Pod。
+- 如果 Deployment 当前 `spec.replicas = 0`，表示已停止，reset 不做恢复启动。
 
 ### 5.7 部署列表
 

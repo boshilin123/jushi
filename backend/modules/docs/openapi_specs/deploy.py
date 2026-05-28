@@ -35,6 +35,10 @@ DEPLOY_PATHS = {
         "post": {
             "tags": ["Deploy"],
             "summary": "重启部署",
+            "description": (
+                "运行中的 GPU 单副本部署通过删除旧 Pod 触发 Deployment 自动重建，避免 rollout restart 先创建新 Pod 导致 GPU 不足。"
+                "已停止部署保持 PaaS 原有语义，reset 不负责恢复启动。"
+            ),
             "requestBody": {"$ref": "#/components/requestBodies/DeployResetEnvelope"},
             "responses": {"200": {"description": "重启结果"}},
         }
@@ -43,6 +47,7 @@ DEPLOY_PATHS = {
         "post": {
             "tags": ["Deploy"],
             "summary": "停止部署",
+            "description": "直接调用 Kubernetes API 将 Deployment replicas 缩为 0，不删除 Deployment 或 Service。",
             "requestBody": {"$ref": "#/components/requestBodies/DeployStopEnvelope"},
             "responses": {"200": {"description": "停止结果"}},
         }
@@ -51,6 +56,7 @@ DEPLOY_PATHS = {
         "post": {
             "tags": ["Deploy"],
             "summary": "部署日志",
+            "description": "按 deployment_name 查询对应 Pod，并通过 Kubernetes Pod log API 读取实时日志；日志不保存到数据库。",
             "requestBody": {"$ref": "#/components/requestBodies/DeployLogsEnvelope"},
             "responses": {"200": {"description": "部署日志"}},
         }

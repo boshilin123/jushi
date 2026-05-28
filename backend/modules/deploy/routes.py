@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
 
 from . import service
 
@@ -56,10 +56,14 @@ def stop():
 
 @deploy_bp.post("/logs")
 def logs():
-    # 部署日志读取待实现，先统一 envelope 校验。
+    # 部署排查输出按纯文本返回，方便 Swagger 和前端直接保留 kubectl describe 的换行格式。
     payload = request.get_json(silent=True) or {}
     result = service.logs(payload)
-    return jsonify(result), result.get("http_status_code", 200)
+    status_code = result.get("http_status_code", 200)
+    describe = ((result.get("content") or {}).get("describe") or "")
+    if 200 <= status_code < 300:
+        return Response(describe, status=status_code, mimetype="text/plain; charset=utf-8")
+    return jsonify(result), status_code
 
 
 @deploy_bp.post("/list")

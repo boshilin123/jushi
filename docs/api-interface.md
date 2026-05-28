@@ -813,7 +813,7 @@ POST /api/deploy/release
 POST /api/deploy/reset
 ```
 
-当前状态：后端已实现。调用 PaaS Deployment restart 动作，不改动 Service 和端口。
+当前状态：后端已实现。按 Deployment 查询关联 Pod，删除旧 Pod 后由 Deployment 控制器自动拉起新 Pod；不改动 Service 和端口。
 
 请求：
 
@@ -841,15 +841,23 @@ POST /api/deploy/reset
   "is_success": true,
   "content": {
     "deployment_name": "nvidia-cuda-xxxxxx",
-    "response": {}
+    "status": "running",
+    "pod_deletes": [
+      {
+        "pod_name": "nvidia-cuda-xxxxxx-abcde",
+        "http_status_code": 200,
+        "is_success": true
+      }
+    ]
   }
 }
 ```
 
 实现要求：
 
-- 调用 PaaS restart 能力：`clusters/{cluster}/namespaces/{namespace}/deployments/{name}:restart`。
-- 重启失败时透传 PaaS 状态码和错误体到 `content.response`。
+- 不调用 Deployment rollout restart，避免 GPU 单副本场景先创建新 Pod 导致 `Insufficient nvidia.com/gpu`。
+- 按 `app=<deployment_name>` 查询 Pod，优先删除 Running Pod；如果没有 Running Pod，则删除查询到的 Pod。
+- 删除 Pod 后由 Deployment/ReplicaSet 自动重建 Pod。
 
 ### 5.7 部署列表
 

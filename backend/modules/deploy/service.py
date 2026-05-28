@@ -987,6 +987,11 @@ def _pod_log_lines(result) -> list[str]:
     return []
 
 
+def _pod_delete_targets(pods: list[dict]) -> list[dict]:
+    running_pods = [pod for pod in pods if pod.get("phase") == "Running"]
+    return running_pods or pods
+
+
 def release(payload: dict) -> dict:
     valid, message = validate_deploy_envelope(payload, "release")
     if not valid:
@@ -1044,15 +1049,44 @@ def reset(payload: dict) -> dict:
     if error_response:
         return error_response
 
-    # 重启使用 PaaS Deployment restart 动作，不改变实例配置和 Service 暴露端口。
-    restart_path = f"/clusters/{Config.DCE_CLUSTER}/namespaces/{Config.DCE_NAMESPACE}/deployments/{name}:restart"
-    status_code, result = client.request_with_status("POST", restart_path)
-    if not 200 <= status_code < 300:
+    # GPU 单副本部署不能直接 rollout restart，否则会先创建新 Pod 导致 GPU 不足；这里删除旧 Pod，由 Deployment 自动拉起新 Pod。
+    pod_path = deployment_pod_path(Config.DCE_CLUSTER, Config.DCE_NAMESPACE, name)
+    pod_status, pod_result = client.request_with_status("GET", pod_path)
+    if pod_status != 200:
+        msg = "查询部署 Pod 失败"
+        return _response_envelope(
+            payload,
+            {"deployment_name": name, "response": pod_result},
+            pod_status,
+            msg,
+            -1,
+        )
+
+    pods = [
+        summarize_pod(pod)
+        for pod in pod_items(pod_result)
+        if isinstance(pod, dict)
+    ]
+    targets = _pod_delete_targets(pods)
+    if not targets:
+        msg = "部署暂无可重启的 Pod"
+        return _response_envelope(payload, {"deployment_name": name, "pods": []}, 404, msg, -1)
+
+    pod_deletes = []
+    all_deleted = True
+    for pod in targets:
+        pod_name = pod.get("pod_name")
+        delete_path = f"/clusters/{Config.DCE_CLUSTER}/namespaces/{Config.DCE_NAMESPACE}/pods/{pod_name}"
+        delete_result, delete_ok = _delete_paas_resource(client, delete_path)
+        pod_deletes.append({"pod_name": pod_name, **delete_result})
+        all_deleted = all_deleted and delete_ok
+
+    if not all_deleted:
         msg = "重启部署失败"
         return _response_envelope(
             payload,
-            {"deployment_name": name, "response": result},
-            status_code,
+            {"deployment_name": name, "pod_deletes": pod_deletes},
+            502,
             msg,
             -1,
         )
@@ -1060,7 +1094,7 @@ def reset(payload: dict) -> dict:
     update_result = repository.update_deploy_status(name, "running")
     return _response_envelope(
         payload,
-        {"deployment_name": name, "status": "running", "response": result, "db_update": update_result},
+        {"deployment_name": name, "status": "running", "pod_deletes": pod_deletes, "db_update": update_result},
         200,
         "OK",
         0,

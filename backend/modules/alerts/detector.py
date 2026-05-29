@@ -13,34 +13,87 @@ START_FAILED_REASONS = {"CrashLoopBackOff", "CreateContainerConfigError", "Creat
 RESOURCE_MESSAGES = ("Insufficient nvidia.com/gpu", "Insufficient huawei.com/Ascend", "Insufficient cpu", "Insufficient memory")
 
 
-def detect_algorithm_alerts() -> tuple[list[dict], dict | None]:
-    namespace = "algorithm"
-    client = K8sClient.from_config(Config)
-    pod_status, pod_result = client.list_pods(namespace)
-    if not 200 <= pod_status < 300:
-        return [], {"source": "pods", "status": pod_status, "response": pod_result}
+def detect_cluster_alerts(query: dict | None = None) -> tuple[list[dict], dict | None, dict]:
+    query = query or {}
+    scope = query.get("scope") or "cluster"
+    namespace = query.get("namespace") or Config.DCE_NAMESPACE
+    cluster_name = query.get("cluster_name") or Config.DCE_CLUSTER
 
-    event_status, event_result = client.list_events(namespace)
+    client = K8sClient.from_config(Config)
+    if scope == "namespace":
+        pod_status, pod_result = client.list_pods(namespace)
+        event_status, event_result = client.list_events(namespace)
+        node_status, node_result = client.list_nodes()
+        scan_scope = {"scope": "namespace", "namespace": namespace, "cluster_name": cluster_name}
+    else:
+        pod_status, pod_result = client.list_cluster_pods()
+        event_status, event_result = client.list_cluster_events()
+        node_status, node_result = client.list_nodes()
+        scan_scope = {"scope": "cluster", "namespace": "all", "cluster_name": cluster_name}
+
+    errors = []
+    if not 200 <= pod_status < 300:
+        errors.append({"source": "pods", "status": pod_status, "response": pod_result})
+    if not 200 <= event_status < 300:
+        errors.append({"source": "events", "status": event_status, "response": event_result})
+    if not 200 <= node_status < 300:
+        errors.append({"source": "nodes", "status": node_status, "response": node_result})
+
+    if not 200 <= pod_status < 300:
+        return [], {"errors": errors}, {**scan_scope, "pod_count": 0, "event_count": 0, "node_count": 0}
+
+    pods = pod_result.get("items", []) or []
     events = event_result.get("items", []) if 200 <= event_status < 300 else []
-    events_by_pod = {}
+    nodes = node_result.get("items", []) if 200 <= node_status < 300 else []
+    events_by_pod = _events_by_kind_and_name(events, "Pod")
+
+    records = {}
+    try:
+        records = {
+            row.get("deployment_name"): row
+            for row in list_deploy_instances()
+            if row.get("deployment_name")
+        }
+    except Exception as exc:
+        errors.append({"source": "deploy_instances", "error": str(exc)})
+
+    alerts = []
+    for pod in pods:
+        pod_namespace = (pod.get("metadata") or {}).get("namespace") or namespace
+        alerts.extend(_detect_pod_alerts(cluster_name, pod_namespace, pod, events_by_pod, records))
+
+    alerts.extend(_detect_warning_event_alerts(cluster_name, events))
+    alerts.extend(_detect_node_alerts(cluster_name, nodes, _events_by_kind_and_name(events, "Node")))
+
+    diagnostics = {
+        **scan_scope,
+        "pod_count": len(pods),
+        "event_count": len(events),
+        "node_count": len(nodes),
+        "sources": ["k8s_pods", "k8s_events", "k8s_nodes"],
+    }
+    return alerts, {"errors": errors} if errors else None, diagnostics
+
+
+def detect_algorithm_alerts() -> tuple[list[dict], dict | None]:
+    alerts, scan_error, _diagnostics = detect_cluster_alerts({"scope": "namespace", "namespace": "algorithm"})
+    return alerts, scan_error
+
+
+def _events_by_kind_and_name(events: list[dict], kind: str) -> dict:
+    grouped = {}
     for event in events:
         involved = event.get("involvedObject") or {}
-        pod_name = involved.get("name")
-        if pod_name:
-            events_by_pod.setdefault(pod_name, []).append(event)
-
-    records = {
-        row.get("deployment_name"): row
-        for row in list_deploy_instances()
-        if row.get("deployment_name")
-    }
-    alerts = []
-    for pod in pod_result.get("items", []) or []:
-        alerts.extend(_detect_pod_alerts(namespace, pod, events_by_pod, records))
-    return alerts, None
+        if involved.get("kind") != kind:
+            continue
+        namespace = involved.get("namespace") or (event.get("metadata") or {}).get("namespace") or ""
+        name = involved.get("name") or ""
+        if name:
+            grouped.setdefault((namespace, name), []).append(event)
+    return grouped
 
 
-def _detect_pod_alerts(namespace: str, pod: dict, events_by_pod: dict, records: dict) -> list[dict]:
+def _detect_pod_alerts(cluster_name: str, namespace: str, pod: dict, events_by_pod: dict, records: dict) -> list[dict]:
     meta = pod.get("metadata") or {}
     status = pod.get("status") or {}
     labels = meta.get("labels") or {}
@@ -49,9 +102,10 @@ def _detect_pod_alerts(namespace: str, pod: dict, events_by_pod: dict, records: 
     record = records.get(deployment_name, {})
     instance_name = record.get("instance_name") or deployment_name or pod_name
     created_at = record.get("created_at") or meta.get("creationTimestamp")
-    events = events_by_pod.get(pod_name, [])
+    events = events_by_pod.get((namespace, pod_name), [])
 
     context = {
+        "cluster_name": cluster_name,
         "namespace": namespace,
         "pod_name": pod_name,
         "deployment_name": deployment_name,
@@ -64,12 +118,14 @@ def _detect_pod_alerts(namespace: str, pod: dict, events_by_pod: dict, records: 
     detected = []
     phase = status.get("phase")
     if phase == "Pending":
-        message = _event_message(events) or "Pod 处于 Pending，实例暂不可用。"
+        message = _event_message(events) or "Pod is Pending and the workload is not available."
         level = "high" if _has_resource_shortage(message) else "medium"
-        title = "GPU 资源不足" if _has_resource_shortage(message) else "实例 Pending 超时"
+        title = "GPU resource insufficient" if _has_resource_shortage(message) else "Pod pending"
         detected.append(_alert(context, "pod_pending", level, title, message, events))
     elif phase == "Failed":
-        detected.append(_alert(context, "pod_failed", "high", "实例运行异常", "Pod 已进入 Failed 状态。", events))
+        detected.append(_alert(context, "pod_failed", "high", "Pod failed", "Pod entered Failed phase.", events))
+    elif phase == "Unknown":
+        detected.append(_alert(context, "pod_unknown", "medium", "Pod status unknown", "Pod phase is Unknown.", events))
 
     for container in status.get("containerStatuses", []) or []:
         state = container.get("state") or {}
@@ -82,8 +138,8 @@ def _detect_pod_alerts(namespace: str, pod: dict, events_by_pod: dict, records: 
                     context,
                     "image_pull_failed",
                     "high",
-                    "镜像拉取失败",
-                    waiting.get("message") or _event_message(events) or "镜像无法拉取，实例创建或重启流程中断。",
+                    "Image pull failed",
+                    waiting.get("message") or _event_message(events) or "Container image cannot be pulled.",
                     events,
                     container.get("name"),
                 )
@@ -94,8 +150,8 @@ def _detect_pod_alerts(namespace: str, pod: dict, events_by_pod: dict, records: 
                     context,
                     "container_start_failed",
                     "high",
-                    "实例启动失败",
-                    waiting.get("message") or _event_message(events) or "容器启动失败，实例暂不可用。",
+                    "Container start failed",
+                    waiting.get("message") or _event_message(events) or "Container failed to start.",
                     events,
                     container.get("name"),
                 )
@@ -106,13 +162,78 @@ def _detect_pod_alerts(namespace: str, pod: dict, events_by_pod: dict, records: 
                     context,
                     "oom_killed",
                     "high",
-                    "实例运行异常",
-                    terminated.get("message") or "容器因内存不足被终止。",
+                    "Container OOMKilled",
+                    terminated.get("message") or "Container was terminated because it exceeded memory limits.",
                     events,
                     container.get("name"),
                 )
             )
     return detected
+
+
+def _detect_warning_event_alerts(cluster_name: str, events: list[dict]) -> list[dict]:
+    alerts = []
+    for event in events:
+        if event.get("type") != "Warning":
+            continue
+        involved = event.get("involvedObject") or {}
+        kind = involved.get("kind") or "Object"
+        name = involved.get("name") or (event.get("metadata") or {}).get("name")
+        namespace = involved.get("namespace") or (event.get("metadata") or {}).get("namespace") or "cluster"
+        reason = event.get("reason") or "Warning"
+        context = {
+            "cluster_name": cluster_name,
+            "namespace": namespace,
+            "pod_name": name if kind == "Pod" else "",
+            "deployment_name": "",
+            "instance_name": name,
+            "node_name": name if kind == "Node" else "",
+            "kind": kind,
+            "reason": reason,
+        }
+        alerts.append(
+            _alert(
+                context,
+                f"k8s_event_{reason}".lower(),
+                _event_level(reason, event.get("message") or ""),
+                f"{kind} warning: {reason}",
+                event.get("message") or reason,
+                [event],
+            )
+        )
+    return alerts
+
+
+def _detect_node_alerts(cluster_name: str, nodes: list[dict], events_by_node: dict) -> list[dict]:
+    alerts = []
+    for node in nodes:
+        meta = node.get("metadata") or {}
+        status = node.get("status") or {}
+        node_name = meta.get("name") or ""
+        conditions = status.get("conditions") or []
+        node_events = events_by_node.get(("", node_name), []) + events_by_node.get(("default", node_name), [])
+        for condition in conditions:
+            condition_type = condition.get("type")
+            condition_status = condition.get("status")
+            if condition_type == "Ready" and condition_status != "True":
+                context = _node_context(cluster_name, node_name, condition)
+                alerts.append(_alert(context, "node_not_ready", "high", "Node not ready", condition.get("message") or "Node is not Ready.", node_events))
+            elif condition_type in {"MemoryPressure", "DiskPressure", "PIDPressure", "NetworkUnavailable"} and condition_status == "True":
+                context = _node_context(cluster_name, node_name, condition)
+                alerts.append(_alert(context, f"node_{condition_type}".lower(), "high", f"Node {condition_type}", condition.get("message") or condition_type, node_events))
+    return alerts
+
+
+def _node_context(cluster_name: str, node_name: str, condition: dict) -> dict:
+    return {
+        "cluster_name": cluster_name,
+        "namespace": "cluster",
+        "pod_name": "",
+        "deployment_name": "",
+        "instance_name": node_name,
+        "node_name": node_name,
+        "phase": condition.get("type"),
+    }
 
 
 def _alert(
@@ -124,20 +245,25 @@ def _alert(
     events: list[dict],
     container_name: str | None = None,
 ) -> dict:
+    namespace = context.get("namespace") or "cluster"
+    target_name = context.get("pod_name") or context.get("node_name") or context.get("instance_name")
     fingerprint_parts = [
-        context["namespace"],
-        context.get("deployment_name") or context.get("pod_name"),
+        context.get("cluster_name") or Config.DCE_CLUSTER,
+        namespace,
+        context.get("deployment_name") or target_name or "",
         alert_type,
-        container_name or "",
+        container_name or context.get("reason") or "",
     ]
     return {
+        "cluster_name": context.get("cluster_name") or Config.DCE_CLUSTER,
+        "namespace": namespace,
         "alert_type": alert_type,
         "alert_level": level,
         "title": title,
         "message": message,
-        "source": "algorithm",
-        "target_name": context.get("pod_name"),
-        "instance_name": context.get("instance_name"),
+        "source": "k8s",
+        "target_name": target_name,
+        "instance_name": context.get("instance_name") or target_name,
         "deployment_name": context.get("deployment_name"),
         "fingerprint": ":".join(fingerprint_parts),
         "evidence": {
@@ -163,12 +289,25 @@ def _event_message(events: list[dict]) -> str:
 
 
 def _event_snapshot(event: dict) -> dict:
+    involved = event.get("involvedObject") or {}
     return {
+        "namespace": involved.get("namespace") or (event.get("metadata") or {}).get("namespace"),
+        "kind": involved.get("kind"),
+        "name": involved.get("name"),
         "type": event.get("type"),
         "reason": event.get("reason"),
         "message": event.get("message"),
         "last_timestamp": event.get("lastTimestamp") or event.get("eventTime"),
     }
+
+
+def _event_level(reason: str, message: str) -> str:
+    text = f"{reason} {message}"
+    if _has_resource_shortage(text) or reason in IMAGE_PULL_REASONS or reason in START_FAILED_REASONS:
+        return "high"
+    if reason in {"Failed", "FailedScheduling", "Unhealthy", "BackOff", "Killing"}:
+        return "high"
+    return "medium"
 
 
 def _has_resource_shortage(message: str) -> bool:

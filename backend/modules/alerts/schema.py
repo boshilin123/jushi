@@ -2,13 +2,21 @@ def normalize_alert_query(payload: dict) -> dict:
     if not payload:
         return {}
     content = payload.get("content") or {}
+    source = content if content else payload
+    scope = source.get("scope") or "cluster"
+    namespace = source.get("namespace")
+    if namespace and namespace != "all":
+        scope = source.get("scope") or "namespace"
     return {
-        "level": content.get("level", "all"),
-        "limit": content.get("limit", 20),
-        "page": content.get("page", 1),
-        "page_size": content.get("page_size", 20),
-        "status": content.get("status"),
-        "deployment_name": content.get("deployment_name"),
+        "scope": scope,
+        "cluster_name": source.get("cluster_name"),
+        "namespace": namespace,
+        "level": source.get("level", "all"),
+        "limit": source.get("limit", 20),
+        "page": source.get("page", 1),
+        "page_size": source.get("page_size", 20),
+        "status": source.get("status"),
+        "deployment_name": source.get("deployment_name"),
     }
 
 
@@ -34,6 +42,8 @@ def normalize_alert_create(payload: dict) -> dict:
         "message": source.get("message", ""),
         "source": source.get("source", ""),
         "target_name": source.get("target_name", ""),
+        "cluster_name": source.get("cluster_name"),
+        "namespace": source.get("namespace"),
         "instance_name": source.get("instance_name"),
         "deployment_name": source.get("deployment_name"),
         "fingerprint": source.get("fingerprint"),

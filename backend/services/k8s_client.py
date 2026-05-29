@@ -60,6 +60,13 @@ class K8sClient:
         path = f"/api/v1/namespaces/{namespace}/pods{suffix}"
         return self._request("GET", path)
 
+    def list_cluster_pods(self, label_selector: str | None = None):
+        query = {}
+        if label_selector:
+            query["labelSelector"] = label_selector
+        suffix = f"?{urlencode(query)}" if query else ""
+        return self._request("GET", f"/api/v1/pods{suffix}")
+
     def list_pods_by_app(self, namespace: str, app_name: str):
         return self.list_pods(namespace, label_selector=f"app={app_name}")
 
@@ -78,6 +85,12 @@ class K8sClient:
         suffix = f"?{urlencode(query)}" if query else ""
         path = f"/api/v1/namespaces/{namespace}/events{suffix}"
         return self._request("GET", path)
+
+    def list_cluster_events(self):
+        return self._request("GET", "/api/v1/events")
+
+    def list_nodes(self):
+        return self._request("GET", "/api/v1/nodes")
 
     def pod_logs(self, namespace: str, pod_name: str, tail_lines: int = 200):
         query = urlencode({"tailLines": tail_lines})

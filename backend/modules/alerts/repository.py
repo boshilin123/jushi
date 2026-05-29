@@ -8,6 +8,8 @@ except ModuleNotFoundError:
 
 
 OPTIONAL_COLUMNS = {
+    "cluster_name": "VARCHAR(128) NULL",
+    "namespace": "VARCHAR(128) NULL",
     "instance_name": "VARCHAR(128) NULL",
     "deployment_name": "VARCHAR(128) NULL",
     "fingerprint": "VARCHAR(255) NULL",
@@ -26,6 +28,9 @@ def ensure_alert_schema() -> None:
             for column, definition in OPTIONAL_COLUMNS.items():
                 if column not in existing:
                     cur.execute(f"ALTER TABLE alert_event ADD COLUMN {column} {definition}")
+            cur.execute("SHOW INDEX FROM alert_event WHERE Key_name = 'idx_alert_cluster_namespace'")
+            if not cur.fetchone():
+                cur.execute("ALTER TABLE alert_event ADD INDEX idx_alert_cluster_namespace (cluster_name, namespace)")
             cur.execute("SHOW INDEX FROM alert_event WHERE Key_name = 'uk_alert_fingerprint'")
             if not cur.fetchone():
                 cur.execute("ALTER TABLE alert_event ADD UNIQUE KEY uk_alert_fingerprint (fingerprint)")
@@ -51,6 +56,8 @@ def _row_to_alert(row: dict) -> dict:
         "source": row.get("source"),
         "target_name": row.get("target_name"),
         "target": row.get("target_name"),
+        "cluster_name": row.get("cluster_name"),
+        "namespace": row.get("namespace"),
         "instance_name": row.get("instance_name") or row.get("target_name"),
         "deployment_name": row.get("deployment_name"),
         "display_status": "异常" if row.get("alert_level") == "high" else "等待",
@@ -81,6 +88,8 @@ def upsert_detected_alerts(alerts: list[dict]) -> int:
                         message,
                         source,
                         target_name,
+                        cluster_name,
+                        namespace,
                         instance_name,
                         deployment_name,
                         fingerprint,
@@ -89,13 +98,15 @@ def upsert_detected_alerts(alerts: list[dict]) -> int:
                         occurrence_count,
                         status
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, 1, 'open')
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, 1, 'open')
                     ON DUPLICATE KEY UPDATE
                         alert_level = IF(status = 'ignored', alert_level, VALUES(alert_level)),
                         title = IF(status = 'ignored', title, VALUES(title)),
                         message = IF(status = 'ignored', message, VALUES(message)),
                         source = IF(status = 'ignored', source, VALUES(source)),
                         target_name = IF(status = 'ignored', target_name, VALUES(target_name)),
+                        cluster_name = IF(status = 'ignored', cluster_name, VALUES(cluster_name)),
+                        namespace = IF(status = 'ignored', namespace, VALUES(namespace)),
                         instance_name = IF(status = 'ignored', instance_name, VALUES(instance_name)),
                         deployment_name = IF(status = 'ignored', deployment_name, VALUES(deployment_name)),
                         last_seen_at = IF(status = 'ignored', last_seen_at, NOW()),
@@ -112,6 +123,8 @@ def upsert_detected_alerts(alerts: list[dict]) -> int:
                         alert.get("message", ""),
                         alert.get("source", "k8s"),
                         alert.get("target_name"),
+                        alert.get("cluster_name"),
+                        alert.get("namespace"),
                         alert.get("instance_name"),
                         alert.get("deployment_name"),
                         alert.get("fingerprint"),
@@ -138,6 +151,12 @@ def list_alerts(query: dict):
     if query.get("deployment_name"):
         conditions.append("deployment_name = %s")
         params.append(query["deployment_name"])
+    if query.get("cluster_name"):
+        conditions.append("cluster_name = %s")
+        params.append(query["cluster_name"])
+    if query.get("namespace") and query.get("namespace") != "all":
+        conditions.append("namespace = %s")
+        params.append(query["namespace"])
 
     page = max(int(query.get("page") or 1), 1)
     page_size = max(min(int(query.get("page_size") or query.get("limit") or 20), 100), 1)
@@ -203,7 +222,11 @@ def list_alerts(query: dict):
 
 def create_alert(payload: dict):
     ensure_alert_schema()
-    fingerprint = payload.get("fingerprint") or f"manual:{payload.get('deployment_name') or payload.get('target_name') or datetime.now().timestamp()}"
+    fingerprint = payload.get("fingerprint") or (
+        f"manual:{payload.get('cluster_name') or 'cluster'}:"
+        f"{payload.get('namespace') or 'default'}:"
+        f"{payload.get('deployment_name') or payload.get('target_name') or datetime.now().timestamp()}"
+    )
     upsert_detected_alerts([{**payload, "fingerprint": fingerprint, "source": payload.get("source") or "manual"}])
     return {"is_success": True, "fingerprint": fingerprint}
 

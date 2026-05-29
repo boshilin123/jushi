@@ -41,6 +41,7 @@ def main() -> int:
     base_url = os.getenv("K8S_API_BASE", "").strip()
     token = os.getenv("K8S_TOKEN", "").strip().strip('"') or os.getenv("DCE_TOKEN", "").strip().strip('"')
     namespace = os.getenv("DCE_NAMESPACE", "algorithm").strip() or "algorithm"
+    scope = os.getenv("ALERT_SCOPE", "cluster").strip() or "cluster"
 
     if not base_url:
         print("K8S_API_BASE is required")
@@ -49,10 +50,12 @@ def main() -> int:
         print("K8S_TOKEN or DCE_TOKEN is required")
         return 2
 
-    for name, path in (
-        ("pods", f"/api/v1/namespaces/{namespace}/pods"),
-        ("events", f"/api/v1/namespaces/{namespace}/events"),
-    ):
+    paths = [
+        ("pods", "/api/v1/pods" if scope == "cluster" else f"/api/v1/namespaces/{namespace}/pods"),
+        ("events", "/api/v1/events" if scope == "cluster" else f"/api/v1/namespaces/{namespace}/events"),
+        ("nodes", "/api/v1/nodes"),
+    ]
+    for name, path in paths:
         try:
             status, payload = _request_json(base_url, token, path)
         except Exception as exc:

@@ -388,8 +388,21 @@ COMPONENTS = {
             "required": False,
             "content": {
                 "application/json": {
-                    "schema": {"type": "object"},
-                    "example": {"level": "all", "limit": 20},
+                    "schema": {"$ref": "#/components/schemas/AlertListRequest"},
+                    "example": {
+                        "msg_id": "alerts-list-001",
+                        "serial": "serial-001",
+                        "context": "list cluster alerts",
+                        "content": {
+                            "scope": "cluster",
+                            "cluster_name": "kpanda-global-cluster",
+                            "namespace": "all",
+                            "level": "all",
+                            "status": "open",
+                            "page": 1,
+                            "page_size": 20,
+                        },
+                    },
                 }
             },
         },
@@ -600,6 +613,27 @@ COMPONENTS = {
             },
             "required": ["id", "password"],
         },
+        "AlertListRequest": {
+            "type": "object",
+            "properties": {
+                "msg_id": {"type": "string", "example": "alerts-list-001"},
+                "serial": {"type": "string", "example": "serial-001"},
+                "context": {"type": "string", "example": "list cluster alerts"},
+                "content": {
+                    "type": "object",
+                    "properties": {
+                        "scope": {"type": "string", "enum": ["cluster", "namespace"], "example": "cluster"},
+                        "cluster_name": {"type": "string", "example": "kpanda-global-cluster"},
+                        "namespace": {"type": "string", "example": "all"},
+                        "level": {"type": "string", "enum": ["all", "high", "medium", "low"], "example": "all"},
+                        "status": {"type": "string", "enum": ["open", "resolved", "ignored"], "example": "open"},
+                        "deployment_name": {"type": "string", "example": "nvidia-cuda-xxxxxx"},
+                        "page": {"type": "integer", "example": 1},
+                        "page_size": {"type": "integer", "example": 20},
+                    },
+                },
+            },
+        },
         "AlertCreateRequest": {
             "type": "object",
             "properties": {
@@ -613,6 +647,8 @@ COMPONENTS = {
                 "message": {"type": "string", "example": "当前 GPU 可用数量不足"},
                 "source": {"type": "string", "example": "deploy"},
                 "target_name": {"type": "string", "example": "NVIDIA/GPU"},
+                "cluster_name": {"type": "string", "example": "kpanda-global-cluster"},
+                "namespace": {"type": "string", "example": "algorithm"},
             },
         },
         "AlertActionRequest": {

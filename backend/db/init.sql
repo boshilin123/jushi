@@ -60,6 +60,8 @@ CREATE TABLE IF NOT EXISTS alert_event (
   message TEXT DEFAULT NULL COMMENT '告警详细描述',
   source VARCHAR(64) DEFAULT NULL COMMENT '告警来源模块，如 deploy、pod、resource、port',
   target_name VARCHAR(128) DEFAULT NULL COMMENT '告警对象名称，如实例名、Pod 名、节点名或资源名',
+  cluster_name VARCHAR(128) DEFAULT NULL COMMENT 'Kubernetes cluster name',
+  namespace VARCHAR(128) DEFAULT NULL COMMENT 'Kubernetes namespace',
   instance_name VARCHAR(128) DEFAULT NULL COMMENT '实例展示名称',
   deployment_name VARCHAR(128) DEFAULT NULL COMMENT 'Kubernetes Deployment 名称',
   fingerprint VARCHAR(255) DEFAULT NULL COMMENT '告警去重指纹',
@@ -70,6 +72,7 @@ CREATE TABLE IF NOT EXISTS alert_event (
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   resolved_at DATETIME DEFAULT NULL COMMENT '解决时间',
   resolver VARCHAR(64) DEFAULT NULL COMMENT '处理人用户名',
+  KEY idx_alert_cluster_namespace (cluster_name, namespace),
   UNIQUE KEY uk_alert_fingerprint (fingerprint)
 ) COMMENT='告警事件表，保存资源、实例、Pod 和端口相关告警';
 

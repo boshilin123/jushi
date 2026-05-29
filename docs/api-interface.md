@@ -1461,7 +1461,7 @@ POST /api/pods/restart
 POST /api/alerts/list
 ```
 
-当前状态：后端已实现。列表接口会先扫描 `algorithm` 命名空间下的 Pod 与 Events，写入/更新 `alert_event` 后再返回未解决、未忽略的实例级告警。
+当前状态：后端已实现。列表接口默认扫描整个 Kubernetes 集群的 Pods、Events、Nodes，写入/更新 `alert_event` 后再返回未解决、未忽略的集群级告警；也可通过 `scope = namespace` 限定单个命名空间。
 
 请求：
 
@@ -1469,10 +1469,15 @@ POST /api/alerts/list
 {
   "msg_id": "alerts-list-001",
   "serial": "serial-001",
-  "context": "list alerts",
+  "context": "list cluster alerts",
   "content": {
+    "scope": "cluster",
+    "cluster_name": "kpanda-global-cluster",
+    "namespace": "all",
     "level": "all",
-    "limit": 20
+    "status": "open",
+    "page": 1,
+    "page_size": 20
   }
 }
 ```
@@ -1483,6 +1488,15 @@ POST /api/alerts/list
 {
   "is_success": true,
   "scan_error": null,
+  "scan_scope": {
+    "scope": "cluster",
+    "namespace": "all",
+    "cluster_name": "kpanda-global-cluster",
+    "pod_count": 28,
+    "event_count": 16,
+    "node_count": 3,
+    "sources": ["k8s_pods", "k8s_events", "k8s_nodes"]
+  },
   "detected": 2,
   "written": 2,
   "items": [
@@ -1494,9 +1508,11 @@ POST /api/alerts/list
       "title": "GPU 资源不足",
       "message": "0/2 nodes are available: 2 Insufficient nvidia.com/gpu.",
       "description": "0/2 nodes are available: 2 Insufficient nvidia.com/gpu.",
-      "source": "algorithm",
+      "source": "k8s",
       "target_name": "nvidia-cuda-xxxxxx-abcde",
       "target": "nvidia-cuda-xxxxxx-abcde",
+      "cluster_name": "kpanda-global-cluster",
+      "namespace": "algorithm",
       "instance_name": "qwen2.5-72b-prod",
       "deployment_name": "nvidia-cuda-xxxxxx",
       "display_status": "异常",
@@ -1525,9 +1541,9 @@ POST /api/alerts/list
 
 实现说明：
 
-- 告警只扫描 `algorithm` 命名空间。
-- 告警来源当前为 Pod phase、容器 waiting/terminated reason 以及 Pod Events。
-- Events 读取依赖 K8s token 对 `events` 资源具备 `list` 权限；无权限时 `scan_error` 会说明原因，列表仍返回数据库中已有告警。
+- 默认 `scope = cluster`，扫描整个集群的 Pods、Events、Nodes；传 `scope = namespace` 和 `namespace` 时只扫描指定命名空间的 Pods/Events，同时仍读取 Nodes。
+- 告警来源当前为 Pod phase、容器 waiting/terminated reason、Warning Events、Node Ready/Pressure 条件。
+- 集群级扫描依赖 K8s token 对 `pods`、`events`、`nodes` 具备 `list` 权限；无权限时 `scan_error` 会说明原因，列表仍返回数据库中已有告警。
 - `instance_name` 优先来自 `deploy_instance.instance_name`，`deployment_name` 来自 Pod 的 `app` label。
 - `ignored` 状态不会被自动扫描重新打开，可用于前端“静默处理”。
 

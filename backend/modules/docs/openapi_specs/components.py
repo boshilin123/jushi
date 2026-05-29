@@ -389,20 +389,7 @@ COMPONENTS = {
             "content": {
                 "application/json": {
                     "schema": {"$ref": "#/components/schemas/AlertListRequest"},
-                    "example": {
-                        "msg_id": "alerts-list-001",
-                        "serial": "serial-001",
-                        "context": "list cluster alerts",
-                        "content": {
-                            "scope": "cluster",
-                            "cluster_name": "kpanda-global-cluster",
-                            "namespace": "all",
-                            "level": "all",
-                            "status": "open",
-                            "page": 1,
-                            "page_size": 20,
-                        },
-                    },
+                    "example": {},
                 }
             },
         },
@@ -615,6 +602,7 @@ COMPONENTS = {
         },
         "AlertListRequest": {
             "type": "object",
+            "description": "Request body is optional. Empty body or {} means cluster-wide open alerts, page=1, page_size=20.",
             "properties": {
                 "msg_id": {"type": "string", "example": "alerts-list-001"},
                 "serial": {"type": "string", "example": "serial-001"},

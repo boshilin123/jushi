@@ -80,7 +80,9 @@ CREATE TABLE IF NOT EXISTS resource_snapshot (
   id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '资源快照主键 ID',
   snapshot_type VARCHAR(64) NOT NULL COMMENT '快照类型，如 summary、nodes、gpus、quotas',
   payload JSON NOT NULL COMMENT '资源快照内容 JSON',
-  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  KEY idx_resource_snapshot_type_time (snapshot_type, created_at),
+  KEY idx_resource_snapshot_created_at (created_at)
 ) COMMENT='资源快照表，用于保存集群资源统计结果';
 
 

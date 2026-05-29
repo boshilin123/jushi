@@ -1463,23 +1463,12 @@ POST /api/alerts/list
 
 当前状态：后端已实现。列表接口默认扫描整个 Kubernetes 集群的 Pods、Events、Nodes，写入/更新 `alert_event` 后再返回未解决、未忽略的集群级告警；也可通过 `scope = namespace` 限定单个命名空间。
 
+请求体可为空。空对象 `{}` 或不传 JSON body 时，默认等价于 `scope = cluster`、`namespace = all`、`status = open`、`page = 1`、`page_size = 20`。
+
 请求：
 
 ```json
-{
-  "msg_id": "alerts-list-001",
-  "serial": "serial-001",
-  "context": "list cluster alerts",
-  "content": {
-    "scope": "cluster",
-    "cluster_name": "kpanda-global-cluster",
-    "namespace": "all",
-    "level": "all",
-    "status": "open",
-    "page": 1,
-    "page_size": 20
-  }
-}
+{}
 ```
 
 响应：
@@ -1544,6 +1533,7 @@ POST /api/alerts/list
 - 默认 `scope = cluster`，扫描整个集群的 Pods、Events、Nodes；传 `scope = namespace` 和 `namespace` 时只扫描指定命名空间的 Pods/Events，同时仍读取 Nodes。
 - 告警来源当前为 Pod phase、容器 waiting/terminated reason、Warning Events、Node Ready/Pressure 条件。
 - 集群级扫描依赖 K8s token 对 `pods`、`events`、`nodes` 具备 `list` 权限；无权限时 `scan_error` 会说明原因，列表仍返回数据库中已有告警。
+- 当前 ServiceAccount 为 `system:serviceaccount:algorithm:jushi-deploy-api` 时，可应用 `docs/jushi-alert-cluster-read-rbac.yaml` 授权全集群只读告警扫描。
 - `instance_name` 优先来自 `deploy_instance.instance_name`，`deployment_name` 来自 Pod 的 `app` label。
 - `ignored` 状态不会被自动扫描重新打开，可用于前端“静默处理”。
 

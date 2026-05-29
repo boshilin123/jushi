@@ -33,11 +33,11 @@ def detect_cluster_alerts(query: dict | None = None) -> tuple[list[dict], dict |
 
     errors = []
     if not 200 <= pod_status < 300:
-        errors.append({"source": "pods", "status": pod_status, "response": pod_result})
+        errors.append(_scan_error("pods", pod_status, pod_result, scan_scope))
     if not 200 <= event_status < 300:
-        errors.append({"source": "events", "status": event_status, "response": event_result})
+        errors.append(_scan_error("events", event_status, event_result, scan_scope))
     if not 200 <= node_status < 300:
-        errors.append({"source": "nodes", "status": node_status, "response": node_result})
+        errors.append(_scan_error("nodes", node_status, node_result, scan_scope))
 
     if not 200 <= pod_status < 300:
         return [], {"errors": errors}, {**scan_scope, "pod_count": 0, "event_count": 0, "node_count": 0}
@@ -78,6 +78,25 @@ def detect_cluster_alerts(query: dict | None = None) -> tuple[list[dict], dict |
 def detect_algorithm_alerts() -> tuple[list[dict], dict | None]:
     alerts, scan_error, _diagnostics = detect_cluster_alerts({"scope": "namespace", "namespace": "algorithm"})
     return alerts, scan_error
+
+
+def _scan_error(source: str, status: int, response: dict, scan_scope: dict) -> dict:
+    item = {"source": source, "status": status, "response": response}
+    if status == 403:
+        scope = scan_scope.get("scope") or "cluster"
+        item["permission_required"] = {
+            "api_group": "",
+            "resource": source,
+            "verb": "list",
+            "scope": "cluster" if scope == "cluster" else "namespace",
+            "namespace": None if scope == "cluster" else scan_scope.get("namespace"),
+            "service_account": "system:serviceaccount:algorithm:jushi-deploy-api",
+        }
+        if scope == "cluster":
+            item["hint"] = (
+                "Cluster-wide alerts require a ClusterRole/ClusterRoleBinding that grants list on pods, events, and nodes."
+            )
+    return item
 
 
 def _events_by_kind_and_name(events: list[dict], kind: str) -> dict:

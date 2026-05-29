@@ -2,7 +2,8 @@ from . import repository
 
 
 def operation_logs(query: dict) -> dict:
-    return {"items": repository.list_operation_logs(query)}
+    result = repository.list_operation_logs(query)
+    return {"items": result["items"], "total": result["total"]}
 
 
 def instance_logs(query: dict) -> dict:

@@ -280,6 +280,43 @@ COMPONENTS = {
                 }
             },
         },
+        "AuditListBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/AuditListEnvelope"},
+                    "example": {
+                        "msg_id": "audit-list-001",
+                        "serial": "serial-001",
+                        "context": "query audit logs",
+                        "content": {
+                            "operator": "admin",
+                            "operation_type": "create",
+                            "keyword": "nvidia",
+                            "page": 1,
+                            "page_size": 20,
+                        },
+                    },
+                }
+            },
+        },
+        "AuditExportBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/AuditExportEnvelope"},
+                    "example": {
+                        "msg_id": "audit-export-001",
+                        "serial": "serial-001",
+                        "context": "export audits",
+                        "content": {
+                            "operator": "admin",
+                            "time_range": "7d",
+                        },
+                    },
+                }
+            },
+        },
     },
     "schemas": {
         "LoginRequest": {
@@ -437,6 +474,42 @@ COMPONENTS = {
                 "pod_name": {"type": "string", "example": "nvidia-cuda-xxxxxx-abcde"},
             },
             "required": ["namespace", "pod_name"],
+        },
+        "AuditContent": {
+            "type": "object",
+            "properties": {
+                "operator": {"type": "string", "example": "admin"},
+                "operation_type": {"type": "string", "example": "create"},
+                "keyword": {"type": "string", "example": "nvidia"},
+                "page": {"type": "integer", "example": 1},
+                "page_size": {"type": "integer", "example": 20},
+            },
+        },
+        "AuditListEnvelope": {
+            "type": "object",
+            "properties": {
+                "msg_id": {"type": "string", "example": "audit-list-001"},
+                "serial": {"type": "string", "example": "serial-001"},
+                "context": {"type": "string", "example": "query audit logs"},
+                "content": {"$ref": "#/components/schemas/AuditContent"},
+            },
+            "required": ["msg_id", "serial", "context"],
+        },
+        "AuditExportEnvelope": {
+            "type": "object",
+            "properties": {
+                "msg_id": {"type": "string", "example": "audit-export-001"},
+                "serial": {"type": "string", "example": "serial-001"},
+                "context": {"type": "string", "example": "export audits"},
+                "content": {
+                    "type": "object",
+                    "properties": {
+                        "operator": {"type": "string", "example": "admin"},
+                        "time_range": {"type": "string", "example": "7d"},
+                    },
+                },
+            },
+            "required": ["msg_id", "serial", "context"],
         },
     },
 }

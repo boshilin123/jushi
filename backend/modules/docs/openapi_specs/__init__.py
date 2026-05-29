@@ -1,4 +1,5 @@
 from .alerts import ALERT_PATHS
+from .audits import AUDIT_PATHS
 from .auth import AUTH_PATHS
 from .cluster import CLUSTER_PATHS
 from .components import COMPONENTS
@@ -21,6 +22,7 @@ TAGS = [
     {"name": "Resources", "description": "集群资源"},
     {"name": "Pods", "description": "Pod 查询与操作"},
     {"name": "Alerts", "description": "告警"},
+    {"name": "Audits", "description": "操作审计"},
     {"name": "Logs", "description": "日志"},
 ]
 
@@ -38,6 +40,7 @@ def build_openapi_spec() -> dict:
         RESOURCE_PATHS,
         POD_PATHS,
         ALERT_PATHS,
+        AUDIT_PATHS,
         LOG_PATHS,
     ):
         paths.update(section_paths)

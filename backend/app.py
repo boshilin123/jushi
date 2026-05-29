@@ -1,3 +1,4 @@
+import json
 import os
 
 from flask import Flask, g, jsonify, request
@@ -9,12 +10,14 @@ except ModuleNotFoundError:
 try:
     from backend.common.auth import parse_token
     from backend.modules.alerts import alerts_bp
+    from backend.modules.audits import audits_bp
     from backend.modules.auth.repository import find_user_by_id as find_auth_user_by_id
     from backend.modules.auth import auth_bp
     from backend.modules.cluster import cluster_bp
     from backend.modules.deploy import deploy_bp
     from backend.modules.docs import docs_bp
     from backend.modules.logs import logs_bp
+    from backend.modules.logs.repository import save_operation_log
     from backend.modules.pods import pods_bp
     from backend.modules.ports import ports_bp
     from backend.modules.resources import resources_bp
@@ -23,12 +26,14 @@ try:
 except ModuleNotFoundError:
     from common.auth import parse_token
     from modules.alerts import alerts_bp
+    from modules.audits import audits_bp
     from modules.auth.repository import find_user_by_id as find_auth_user_by_id
     from modules.auth import auth_bp
     from modules.cluster import cluster_bp
     from modules.deploy import deploy_bp
     from modules.docs import docs_bp
     from modules.logs import logs_bp
+    from modules.logs.repository import save_operation_log
     from modules.pods import pods_bp
     from modules.ports import ports_bp
     from modules.resources import resources_bp
@@ -98,6 +103,76 @@ def _register_auth_interceptor(app: Flask) -> None:
         return None
 
 
+DEPLOY_PATHS = {
+    "/api/deploy/check-available": "check_available",
+    "/api/deploy/create-default": "create",
+    "/api/deploy/retrieve": "retrieve",
+    "/api/deploy/release": "release",
+    "/api/deploy/reset": "reset",
+    "/api/deploy/list": "list",
+}
+
+
+def _register_log_middleware(app: Flask) -> None:
+    @app.after_request
+    def log_deploy_operations(response):
+        if request.method != "POST":
+            return response
+        operation_type = DEPLOY_PATHS.get(request.path)
+        if not operation_type:
+            return response
+
+        try:
+            req_body = request.get_json(silent=True) or {}
+            resp_body = response.get_json(silent=True) or {}
+            content = req_body.get("content") or {}
+
+            if operation_type == "check_available":
+                devices = content.get("devices") or {}
+                target_name = str(list(devices.keys())[0]) if devices else ""
+            elif operation_type == "create-default":
+                resp_content = resp_body.get("content") or {}
+                target_name = str(resp_content.get("deployment_name", ""))
+            elif operation_type in ("retrieve", "release", "reset"):
+                target_name = str(content.get("name", ""))
+            elif operation_type == "list":
+                target_name = "all"
+            else:
+                target_name = ""
+
+            is_success = 1 if response.status_code < 400 else 0
+            error_message = ""
+            if not is_success:
+                error_message = str(resp_body.get("msg", "") or resp_body.get("message", "") or "")
+
+            xff = request.headers.get("X-Forwarded-For", "")
+            if xff:
+                operator_ip = xff.split(",")[0].strip()
+            else:
+                operator_ip = request.headers.get("X-Real-IP", "").strip() or (request.remote_addr or "")
+
+            operator = ""
+            if hasattr(g, "current_user") and g.current_user:
+                operator = str(g.current_user.get("username", ""))
+
+            record = {
+                "operation_type": operation_type,
+                "operator": operator,
+                "operator_ip": operator_ip,
+                "target_type": "deploy",
+                "target_name": target_name,
+                "request_payload": json.dumps(req_body, ensure_ascii=False),
+                "response_payload": json.dumps(resp_body, ensure_ascii=False),
+                "http_status_code": response.status_code,
+                "is_success": is_success,
+                "error_message": error_message,
+            }
+            save_operation_log(record)
+        except Exception:
+            pass
+        return response
+
+
 def create_app() -> Flask:
     app = Flask(__name__)
     # 开发联调阶段允许 Swagger UI、Vite 前端等跨域请求后端 API。
@@ -112,6 +187,7 @@ def create_app() -> Flask:
             return response
 
     _register_auth_interceptor(app)
+    _register_log_middleware(app)
 
     # 按业务域注册接口模块；根路径 "/" 暂不占用，后续留给前端或网关。
     app.register_blueprint(system_bp)
@@ -125,6 +201,7 @@ def create_app() -> Flask:
     app.register_blueprint(pods_bp, url_prefix="/api/pods")
     app.register_blueprint(alerts_bp, url_prefix="/api/alerts")
     app.register_blueprint(logs_bp, url_prefix="/api/logs")
+    app.register_blueprint(audits_bp, url_prefix="/api/audits")
 
     docs_port = _resolve_docs_port()
     print(f"[Jushi] Swagger UI: http://127.0.0.1:{docs_port}/api/docs")

@@ -615,6 +615,40 @@ def _merge_resource_totals(primary, fallback):
 
     return merged
 
+def _merge_cluster_resource_totals(primary, fallback, allocated=False):
+    """
+    集群汇总合并规则。
+
+    对 GPU 相关字段：
+    - allocatable：优先使用节点聚合值，因为节点 label 能识别 vGPU 节点底层物理卡。
+    - allocated：取 PaaS 与 Pod 聚合中的较大值，避免漏算。
+
+    对 CPU / 内存：
+    - 保持原逻辑，primary 有值优先。
+    """
+    merged = dict(primary or {})
+    fallback = fallback or {}
+
+    gpu_related_keys = set(PHYSICAL_GPU_KEYS + VGPU_KEYS + GPU_MEMORY_KEYS + GPU_CORE_KEYS)
+
+    for key, value in fallback.items():
+        fallback_value = _resource_get(fallback, key)
+        current_value = _resource_get(merged, key)
+
+        if key in gpu_related_keys:
+            if allocated:
+                if max(current_value, fallback_value) > 0:
+                    merged[key] = max(current_value, fallback_value)
+            else:
+                if fallback_value > 0:
+                    merged[key] = fallback_value
+                elif current_value <= 0:
+                    merged[key] = value
+        else:
+            if current_value <= 0:
+                merged[key] = value
+
+    return merged
 
 def _get_resource_summary_from_cluster(cluster):
     candidates = [
@@ -708,14 +742,178 @@ def _node_labels(node):
 def _node_capacity(node):
     return _safe_get(node, "status", "capacity", default={}) or {}
 
+def _to_int(value, default=0):
+    try:
+        if value is None or value == "":
+            return default
+        return int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return default
 
-def _node_allocatable(node):
+
+def _normalize_gpu_model(value):
+    if not value:
+        return UNKNOWN_GPU_MODEL
+
+    text = str(value).strip()
+    text = text.replace("_", " ").replace("-", " ")
+
+    # NVIDIA-A10 -> NVIDIA A10
+    text = " ".join(text.split())
+    return text
+
+
+def _node_gpu_mode(node):
+    labels = _node_labels(node)
+
+    mode = str(labels.get("gpu.node.kpanda.io/nvidia-gpu-mode") or "").lower()
+    vendor = str(labels.get("node.kpanda.io/gpu-vendor") or "").lower()
+    vgpu_plugin = str(labels.get("nvidia.com/vgpu.deploy.device-plugin") or "").lower()
+
+    if mode == "vgpu" or "vgpu" in vendor or vgpu_plugin == "true":
+        return "vgpu"
+
+    if mode == "gpu" or "nvidia-gpu" in vendor:
+        return "gpu"
+
+    allocatable = _node_base_allocatable(node)
+    if _resource_get(allocatable, "nvidia.com/vgpu") > 0:
+        return "vgpu"
+
+    if _resource_get(allocatable, "nvidia.com/gpu") > 0:
+        return "gpu"
+
+    return "unknown"
+
+
+def _node_gpu_vendor(node):
+    labels = _node_labels(node)
+    return labels.get("node.kpanda.io/gpu-vendor") or ""
+
+
+def _node_gpu_product(node):
+    labels = _node_labels(node)
+
+    value = (
+        labels.get("nvidia.com/gpu.product")
+        or labels.get("gpu.nvidia.com/model")
+        or labels.get("gpu.product")
+        or labels.get("accelerator")
+        or ""
+    )
+
+    if value:
+        return _normalize_gpu_model(value)
+
+    return UNKNOWN_GPU_MODEL
+
+
+def _node_gpu_label_count(node):
+    labels = _node_labels(node)
+    return _to_int(labels.get("nvidia.com/gpu.count"), 0)
+
+
+def _node_gpu_memory_mib_per_card(node):
+    labels = _node_labels(node)
+
+    # 青海节点 label: nvidia.com/gpu.memory=23028，单位按 MiB 处理。
+    label_memory = _to_int(labels.get("nvidia.com/gpu.memory"), 0)
+    if label_memory > 0:
+        return label_memory
+
+    # 兜底用环境变量，默认 A10 24GiB。
+    return int(_gpu_card_memory_gib() * 1024)
+
+
+def _node_gpu_physical_count(node, allocatable=None):
+    allocatable = allocatable or _node_base_allocatable(node)
+
+    label_count = _node_gpu_label_count(node)
+    if label_count > 0:
+        return label_count
+
+    gpu_count = _resource_get(allocatable, "nvidia.com/gpu")
+    if gpu_count > 0:
+        return gpu_count
+
+    vgpu_count = _resource_get(allocatable, "nvidia.com/vgpu")
+    if vgpu_count > 0:
+        return _estimated_card_count(0, vgpu_count)
+
+    return 0
+
+
+def _node_gpu_core_total(node, physical_count):
+    if physical_count <= 0:
+        return 0
+    return int(physical_count * _gpu_card_compute_units())
+
+
+def _node_gpu_mem_total_mib(node, physical_count):
+    if physical_count <= 0:
+        return 0
+    return int(physical_count * _node_gpu_memory_mib_per_card(node))
+
+
+def _node_vgpu_per_gpu(node, physical_count, vgpu_total):
+    if physical_count <= 0 or vgpu_total <= 0:
+        return 0
+    return round(vgpu_total / physical_count, 2)
+
+
+def _node_base_allocatable(node):
     return (
         _safe_get(node, "status", "resourceSummary", "allocatable")
         or _safe_get(node, "status", "allocatable")
         or _safe_get(node, "status", "capacity")
         or {}
     )
+
+
+def _enhance_node_allocatable(node, allocatable=None):
+    """
+    将节点 label 中的 GPU 信息补进 allocatable。
+
+    青海场景：
+    qhvgpu1:
+      nvidia.com/gpu=4
+      nvidia.com/vgpu=0
+      nvidia.com/gpu.count=4
+
+    qhvgpu2:
+      nvidia.com/gpu=0
+      nvidia.com/vgpu=40
+      nvidia.com/gpu.count=4
+
+    这里需要把 qhvgpu2 的底层 4 张物理卡也纳入 physical_gpu_total。
+    """
+    base = dict(allocatable or _node_base_allocatable(node))
+
+    physical_count = _node_gpu_physical_count(node, base)
+    vgpu_total = _resource_get(base, "nvidia.com/vgpu")
+
+    if physical_count > 0:
+        # gpu_total 代表底层物理卡数量。vgpu 节点也要计入。
+        base["nvidia.com/gpu"] = str(physical_count)
+
+        # 根据节点 label 自动计算显存容量。
+        gpu_mem_total_mib = _node_gpu_mem_total_mib(node, physical_count)
+        if gpu_mem_total_mib > 0:
+            base["nvidia.com/gpumem"] = str(gpu_mem_total_mib)
+
+        # 算力暂时使用标准化容量单位。
+        gpu_core_total = _node_gpu_core_total(node, physical_count)
+        if gpu_core_total > 0:
+            base["nvidia.com/gpucores"] = str(gpu_core_total)
+
+    if vgpu_total > 0:
+        base["nvidia.com/vgpu"] = str(vgpu_total)
+
+    return base
+
+
+def _node_allocatable(node):
+    return _enhance_node_allocatable(node, _node_base_allocatable(node))
 
 
 def _node_allocated_from_paas(node):
@@ -811,10 +1009,9 @@ def _gpu_model_node_map():
 
 
 def _extract_gpu_model(node):
-    node_name = _node_name(node)
-    node_map = _gpu_model_node_map()
-    if node_name in node_map:
-        return str(node_map[node_name])
+    product = _node_gpu_product(node)
+    if product != UNKNOWN_GPU_MODEL:
+        return product
 
     labels = _node_labels(node)
     capacity = _node_capacity(node)
@@ -833,7 +1030,7 @@ def _extract_gpu_model(node):
     for key in candidate_keys:
         value = labels.get(key)
         if value:
-            return str(value).replace("_", " ")
+            return _normalize_gpu_model(value)
 
     if _parse_resource(
         "huawei.com/Ascend310P",
@@ -854,7 +1051,6 @@ def _extract_gpu_model(node):
         return "NVIDIA GPU"
 
     return UNKNOWN_GPU_MODEL
-
 
 def _node_status(node):
     conditions = _safe_get(node, "status", "conditions", default=[]) or []
@@ -889,8 +1085,16 @@ def _resource_context(query):
         "raw_nodes": raw_nodes,
         "pods": pods,
         "pod_allocated_by_node": pod_allocated_by_node,
-        "allocatable": _merge_resource_totals(snapshot["allocatable"], node_allocatable_total),
-        "allocated": _merge_resource_totals(snapshot["allocated"], node_allocated_total),
+        "allocatable": _merge_cluster_resource_totals(
+            snapshot["allocatable"],
+            node_allocatable_total,
+            allocated=False,
+        ),
+        "allocated": _merge_cluster_resource_totals(
+            snapshot["allocated"],
+            node_allocated_total,
+            allocated=True,
+        ),
         "collected_at": collected_at,
         "metric_source": METRIC_SOURCE,
         "diagnostics": {
@@ -904,7 +1108,6 @@ def _resource_context(query):
 
 
 def _resource_summary_cards(allocatable, allocated):
-    # 物理卡和 vGPU 分开统计，避免 gpu_total 把 vGPU 也算进去。
     physical_gpu_total = _sum_resources(allocatable, PHYSICAL_GPU_KEYS)
     physical_gpu_used = _sum_resources(allocated, PHYSICAL_GPU_KEYS)
 
@@ -930,16 +1133,26 @@ def _resource_summary_cards(allocatable, allocated):
         vgpu_total,
     )
 
-    # 如果环境没有暴露 nvidia.com/gpumem，则按物理卡数量估算显存容量。
+    # 没有显存总量时，按环境变量估算总量。
     if gpu_mem_total_mib <= 0 and _capacity_estimation_enabled() and estimated_card_count > 0:
         gpu_mem_total_mib = int(estimated_card_count * _gpu_card_memory_gib() * 1024)
+        capacity_estimated = True
+        gpu_mem_capacity_estimated = True
+
+    # 有显存总量但没有显存分配量时，按物理卡 / vGPU 分配比例估算已分配显存。
+    if gpu_mem_total_mib > 0 and gpu_mem_used_mib <= 0 and ratio > 0:
         gpu_mem_used_mib = int(gpu_mem_total_mib * ratio)
         capacity_estimated = True
         gpu_mem_capacity_estimated = True
 
-    # 如果环境没有暴露 nvidia.com/gpucores，则按物理卡数量估算算力容量。
+    # 没有算力总量时，按物理卡数量估算标准化算力容量。
     if gpu_core_total <= 0 and _capacity_estimation_enabled() and estimated_card_count > 0:
         gpu_core_total = int(estimated_card_count * _gpu_card_compute_units())
+        capacity_estimated = True
+        gpu_core_capacity_estimated = True
+
+    # 有算力总量但没有算力分配量时，按资源分配比例估算。
+    if gpu_core_total > 0 and gpu_core_used <= 0 and ratio > 0:
         gpu_core_used = int(gpu_core_total * ratio)
         capacity_estimated = True
         gpu_core_capacity_estimated = True
@@ -954,13 +1167,11 @@ def _resource_summary_cards(allocatable, allocated):
     gpu_mem_alloc_percent = _percent(gpu_mem_used_mib, gpu_mem_total_mib)
 
     return {
-        # 兼容原有字段：gpu_total 现在只代表物理卡数量。
         "gpu_total": physical_gpu_total,
         "gpu_used": physical_gpu_used,
         "gpu_available": max(physical_gpu_total - physical_gpu_used, 0),
         "gpu_alloc_percent": _percent(physical_gpu_used, physical_gpu_total),
 
-        # 新增明确字段，避免后续再混淆。
         "physical_gpu_total": physical_gpu_total,
         "physical_gpu_used": physical_gpu_used,
         "physical_gpu_available": max(physical_gpu_total - physical_gpu_used, 0),
@@ -971,7 +1182,6 @@ def _resource_summary_cards(allocatable, allocated):
         "vgpu_available": max(vgpu_total - vgpu_used, 0),
         "vgpu_alloc_percent": _percent(vgpu_used, vgpu_total),
 
-        # 总资源单元仅用于诊断，不建议前端当“显卡数”展示。
         "accelerator_unit_total": physical_gpu_total + vgpu_total,
         "accelerator_unit_used": physical_gpu_used + vgpu_used,
 
@@ -1003,7 +1213,7 @@ def _resource_summary_cards(allocatable, allocated):
 
         "capacity_estimated": capacity_estimated,
         "capacity_estimation_source": (
-            "env_or_default"
+            "node_label_or_ratio"
             if capacity_estimated
             else "resource_key"
         ),
@@ -1014,7 +1224,6 @@ def _resource_summary_cards(allocatable, allocated):
             "vgpu_per_gpu": _vgpu_per_gpu(),
         },
     }
-
 
 def summary(query):
     context, err = _resource_context(query)
@@ -1088,6 +1297,15 @@ def nodes(query):
             "health_text": _health_text(level),
             "gpu_model": _extract_gpu_model(node),
             "collected_at": context["collected_at"],
+            "gpu_mode": _node_gpu_mode(node),
+            "gpu_vendor": _node_gpu_vendor(node),
+            "gpu_memory_mib_per_card": _node_gpu_memory_mib_per_card(node),
+            "gpu_memory_gib_per_card": _mib_to_gib(_node_gpu_memory_mib_per_card(node)),
+            "vgpu_per_gpu": _node_vgpu_per_gpu(
+                node,
+                cards.get("physical_gpu_total", 0),
+                cards.get("vgpu_total", 0),
+            ),
             "metric_source": context["metric_source"],
 
             "gpu_total": cards["gpu_total"],
@@ -1262,8 +1480,8 @@ def cards(query):
     for node in node_items:
         node_name = node.get("node_name") or "unknown-node"
 
-        physical_gpu_total = int(node.get("gpu_total") or 0)
-        physical_gpu_used = int(node.get("gpu_used") or 0)
+        physical_gpu_total = int(node.get("physical_gpu_total") or node.get("gpu_total") or 0)
+        physical_gpu_used = int(node.get("physical_gpu_used") or node.get("gpu_used") or 0)
 
         vgpu_total = int(node.get("vgpu_total") or 0)
         vgpu_used = int(node.get("vgpu_used") or 0)
@@ -1273,6 +1491,9 @@ def cards(query):
 
         gpu_mem_total_gib = float(node.get("gpu_mem_total_gib") or 0)
         gpu_mem_used_gib = float(node.get("gpu_mem_used_gib") or 0)
+
+        gpu_mode = node.get("gpu_mode") or "unknown"
+        vgpu_per_gpu = node.get("vgpu_per_gpu") or _vgpu_per_gpu()
 
         has_gpu_like_resource = (
             physical_gpu_total > 0
@@ -1284,19 +1505,22 @@ def cards(query):
         if not has_gpu_like_resource:
             continue
 
-        card_count = _estimated_card_count(physical_gpu_total, vgpu_total)
+        card_count = physical_gpu_total or _estimated_card_count(0, vgpu_total)
         if card_count <= 0:
             card_count = 1
 
-        if physical_gpu_total > 0:
-            data_precision = "physical_gpu_estimated"
-            mapping_rule = "physical GPU resource count"
-        elif vgpu_total > 0:
-            data_precision = "vgpu_estimated"
-            mapping_rule = f"1 GPU = {_vgpu_per_gpu()} vGPU"
+        if gpu_mode == "vgpu":
+            data_precision = "vgpu_node_label"
+            mapping_rule = f"vGPU node label: 1 GPU ≈ {vgpu_per_gpu} vGPU"
+            usage_mode = "vGPU 后台调度"
+        elif gpu_mode == "gpu":
+            data_precision = "physical_gpu_node_label"
+            mapping_rule = "physical GPU node label"
+            usage_mode = "物理 GPU 调度"
         else:
             data_precision = "node_resource_snapshot"
             mapping_rule = "node resource snapshot"
+            usage_mode = "GPU 资源调度"
 
         per_vgpu_total = _split_value(vgpu_total, card_count)
         per_vgpu_used = _split_value(vgpu_used, card_count)
@@ -1308,7 +1532,10 @@ def cards(query):
         per_mem_used = _split_value(gpu_mem_used_gib, card_count)
 
         for index in range(card_count):
-            physical_card_allocated = 1 if index < physical_gpu_used else 0
+            if gpu_mode == "vgpu":
+                physical_card_allocated = 0
+            else:
+                physical_card_allocated = 1 if index < physical_gpu_used else 0
 
             card_status = "空闲"
             if node.get("health_level") == "red":
@@ -1324,9 +1551,10 @@ def cards(query):
             card_items.append({
                 "card_id": f"{node_name}-gpu-{index + 1:02d}",
                 "card_status": card_status,
-                "usage_mode": "vGPU 后台调度" if vgpu_total > 0 else "物理 GPU 调度",
+                "usage_mode": usage_mode,
                 "node_name": node_name,
                 "gpu_model": node.get("gpu_model") or UNKNOWN_GPU_MODEL,
+                "gpu_mode": gpu_mode,
 
                 "physical_gpu": {
                     "allocated": physical_card_allocated,
@@ -1337,6 +1565,7 @@ def cards(query):
                     "allocated": per_vgpu_used,
                     "total": per_vgpu_total,
                     "percent": _percent(per_vgpu_used, per_vgpu_total),
+                    "per_gpu": vgpu_per_gpu if gpu_mode == "vgpu" else 0,
                 },
                 "gpu_core": {
                     "allocated": per_core_used,
@@ -1364,67 +1593,13 @@ def cards(query):
                 "capacity_estimation_source": node.get("capacity_estimation_source"),
             })
 
-    if not card_items:
-        summary_result = summary(query)
-        if summary_result.get("is_success"):
-            cards_data = summary_result.get("cards", {}) or {}
-
-            has_cluster_resource = (
-                int(cards_data.get("gpu_total") or 0) > 0
-                or int(cards_data.get("vgpu_total") or 0) > 0
-                or int(cards_data.get("gpu_core_total") or 0) > 0
-                or float(cards_data.get("gpu_mem_total_gib") or 0) > 0
-            )
-
-            if has_cluster_resource:
-                card_items.append({
-                    "card_id": "cluster-resource-summary",
-                    "card_status": "运行中",
-                    "usage_mode": "集群资源汇总",
-                    "node_name": "cluster",
-                    "gpu_model": "Cluster Resource",
-                    "physical_gpu": {
-                        "allocated": cards_data.get("gpu_used", 0),
-                        "total": cards_data.get("gpu_total", 0),
-                        "percent": cards_data.get("gpu_alloc_percent", 0),
-                    },
-                    "vgpu": {
-                        "allocated": cards_data.get("vgpu_used", 0),
-                        "total": cards_data.get("vgpu_total", 0),
-                        "percent": cards_data.get("vgpu_alloc_percent", 0),
-                    },
-                    "gpu_core": {
-                        "allocated": cards_data.get("gpu_core_used", 0),
-                        "total": cards_data.get("gpu_core_total", 0),
-                        "percent": cards_data.get("gpu_core_alloc_percent", 0),
-                        "usage_percent": None,
-                        "capacity_estimated": cards_data.get("gpu_core_capacity_estimated", False),
-                    },
-                    "gpu_memory": {
-                        "allocated_gib": cards_data.get("gpu_mem_used_gib", 0),
-                        "total_gib": cards_data.get("gpu_mem_total_gib", 0),
-                        "percent": cards_data.get("gpu_mem_alloc_percent", 0),
-                        "usage_percent": None,
-                        "capacity_estimated": cards_data.get("gpu_mem_capacity_estimated", False),
-                    },
-                    "data_precision": "cluster_resource_snapshot",
-                    "is_real_physical_card": False,
-                    "metric_source": summary_result.get("metric_source") or METRIC_SOURCE,
-                    "mapping_rule": "cluster resource snapshot",
-                    "usage_metric_ready": False,
-                    "usage_metric_source": "not_configured",
-                    "capacity_estimated": cards_data.get("capacity_estimated", False),
-                    "capacity_estimation_source": cards_data.get("capacity_estimation_source"),
-                })
-
     return _ok({
         "items": card_items,
         "total": len(card_items),
         "metric_source": METRIC_SOURCE,
-        "mapping_rule": "Resources are split by estimated physical card count.",
-        "note": "Cards are inferred from node or cluster resources. Real device UUID and runtime usage require device metrics integration.",
+        "mapping_rule": "Cards are inferred from node labels and Kubernetes resource snapshots.",
+        "note": "Real GPU UUID and runtime usage require device metrics integration.",
     })
-
 
 def trend(query):
     range_value = query.get("range") or "1h"

@@ -12,7 +12,7 @@ AUDIT_PATHS = {
             "tags": ["Audits"],
             "summary": "导出操作审计",
             "requestBody": {"$ref": "#/components/requestBodies/AuditExportBody"},
-            "responses": {"200": {"description": "JSON 文件下载"}},
+            "responses": {"200": {"description": "JSON or Excel file download"}},
         }
     },
 }

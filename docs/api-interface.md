@@ -1531,6 +1531,7 @@ POST /api/alerts/list
 实现说明：
 
 - 默认 `scope = cluster`，扫描整个集群的 Pods、Events、Nodes；传 `scope = namespace` 和 `namespace` 时只扫描指定命名空间的 Pods/Events，同时仍读取 Nodes。
+- 如果 `scope = cluster` 因 RBAC 返回 403，后端会自动降级到 `DCE_NAMESPACE` 命名空间扫描，并在 `scan_scope.requested_scope` 和 `scan_scope.fallback_reason` 中说明实际扫描范围。
 - 告警来源当前为 Pod phase、容器 waiting/terminated reason、Warning Events、Node Ready/Pressure 条件。
 - 集群级扫描依赖 K8s token 对 `pods`、`events`、`nodes` 具备 `list` 权限；无权限时 `scan_error` 会说明原因，列表仍返回数据库中已有告警。
 - 当前 ServiceAccount 为 `system:serviceaccount:algorithm:jushi-deploy-api` 时，可应用 `docs/jushi-alert-cluster-read-rbac.yaml` 授权全集群只读告警扫描。
@@ -1706,7 +1707,7 @@ GET /api/logs/pod
 POST /api/audits/list
 ```
 
-当前状态：一期需补齐。前端适配层已预留该接口。
+当前状态：后端已实现。默认导出 JSON 文件；`content.format = excel` 时导出 Excel xlsx 文件。
 
 请求：
 
@@ -1789,22 +1790,16 @@ POST /api/audits/export
   "context": "export audits",
   "content": {
     "format": "excel",
-    "result": "all",
-    "time_range": "7d"
+    "operator": "admin",
+    "operation_type": "create",
+    "keyword": "nvidia"
   }
 }
 ```
 
 响应：
 
-```json
-{
-  "is_success": true,
-  "content": {
-    "download_url": "http://localhost:8080/downloads/audit-export.xlsx"
-  }
-}
-```
+返回文件流。`format = json` 时响应 `Content-Type: application/json`，文件名 `audit_logs.json`；`format = excel` 时响应 `Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`，文件名 `audit_logs.xlsx`。
 
 ## 11. 前后端字段对齐说明
 

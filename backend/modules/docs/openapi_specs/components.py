@@ -463,6 +463,7 @@ COMPONENTS = {
                             "operator": "admin",
                             "operation_type": "create",
                             "keyword": "nvidia",
+                            "format": "excel",
                         },
                     },
                 }
@@ -661,6 +662,7 @@ COMPONENTS = {
                 "operator": {"type": "string", "example": "admin"},
                 "operation_type": {"type": "string", "example": "create"},
                 "keyword": {"type": "string", "example": "nvidia"},
+                "format": {"type": "string", "enum": ["json", "excel"], "example": "excel"},
                 "page": {"type": "integer", "example": 1},
                 "page_size": {"type": "integer", "example": 20},
             },

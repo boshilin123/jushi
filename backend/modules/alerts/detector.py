@@ -39,6 +39,29 @@ def detect_cluster_alerts(query: dict | None = None) -> tuple[list[dict], dict |
     if not 200 <= node_status < 300:
         errors.append(_scan_error("nodes", node_status, node_result, scan_scope))
 
+    if scope == "cluster" and _is_forbidden(pod_status, event_status):
+        fallback_namespace = namespace or Config.DCE_NAMESPACE
+        fallback_pod_status, fallback_pod_result = client.list_pods(fallback_namespace)
+        fallback_event_status, fallback_event_result = client.list_events(fallback_namespace)
+        if 200 <= fallback_pod_status < 300:
+            pod_status, pod_result = fallback_pod_status, fallback_pod_result
+            event_status, event_result = fallback_event_status, fallback_event_result
+            scan_scope = {
+                "scope": "namespace",
+                "requested_scope": "cluster",
+                "namespace": fallback_namespace,
+                "cluster_name": cluster_name,
+                "fallback_reason": "cluster-scope RBAC denied; scanned namespace scope instead",
+            }
+            if not 200 <= event_status < 300:
+                errors.append(_scan_error("events", event_status, event_result, scan_scope))
+        else:
+            errors.append(_scan_error("pods", fallback_pod_status, fallback_pod_result, {
+                "scope": "namespace",
+                "namespace": fallback_namespace,
+                "cluster_name": cluster_name,
+            }))
+
     if not 200 <= pod_status < 300:
         return [], {"errors": errors}, {**scan_scope, "pod_count": 0, "event_count": 0, "node_count": 0}
 
@@ -97,6 +120,10 @@ def _scan_error(source: str, status: int, response: dict, scan_scope: dict) -> d
                 "Cluster-wide alerts require a ClusterRole/ClusterRoleBinding that grants list on pods, events, and nodes."
             )
     return item
+
+
+def _is_forbidden(*statuses: int) -> bool:
+    return any(status == 403 for status in statuses)
 
 
 def _events_by_kind_and_name(events: list[dict], kind: str) -> dict:

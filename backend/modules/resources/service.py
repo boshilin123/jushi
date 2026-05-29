@@ -61,7 +61,7 @@ GPU_MEMORY_KEYS = ["nvidia.com/gpumem"]
 GPU_CORE_KEYS = ["nvidia.com/gpucores"]
 
 UNKNOWN_GPU_MODEL = "Unknown"
-METRIC_SOURCE = "paas_cluster_resourceSummary + k8s_node_fallback + pod_resource_fallback"
+METRIC_SOURCE = "paas_cluster_resourceSummary + k8s_node_label + cluster_pod_resource_fallback"
 
 
 def _now():
@@ -720,15 +720,35 @@ def _list_nodes(client):
 
 
 def _list_namespace_pods(namespace):
+    """
+    资源统计要看全局 Pod，而不是只看 DCE_NAMESPACE。
+
+    原因：
+    1. 青海环境 GPU 工作负载分布在 algorithm / default / cigaretee / yolo / test1 等多个 namespace。
+    2. 如果只查 algorithm，会把 qhvgpu1 的 GPU 使用量算成 1/4，也就是 25%。
+    3. 真实资源分配口径应该基于全 namespace Running Pod 聚合。
+
+    如果 service account 没有 list cluster pods 权限，则降级为当前 namespace。
+    """
     client, err = _k8s_client()
     if err:
         return [], err
 
-    status, result = client.list_pods(namespace)
-    if not 200 <= status < 300:
-        return [], _error("Failed to query pod list", status, result)
+    status, result = client.list_cluster_pods()
+    if 200 <= status < 300:
+        return _extract_items(result), None
 
-    return _extract_items(result), None
+    fallback_status, fallback_result = client.list_pods(namespace)
+    if not 200 <= fallback_status < 300:
+        return [], _error("Failed to query pod list", fallback_status, {
+            "cluster_pods_error": result,
+            "namespace_pods_error": fallback_result,
+        })
+
+    return _extract_items(fallback_result), {
+        "warning": "No permission to list cluster pods. Fallback to namespace pods.",
+        "cluster_pods_error": result,
+    }
 
 
 def _node_name(node):

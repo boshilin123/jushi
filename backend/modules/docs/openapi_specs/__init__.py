@@ -1,4 +1,5 @@
 from .alerts import ALERT_PATHS
+from .audits import AUDIT_PATHS
 from .auth import AUTH_PATHS
 from .cluster import CLUSTER_PATHS
 from .components import COMPONENTS
@@ -21,12 +22,12 @@ TAGS = [
     {"name": "Resources", "description": "集群资源"},
     {"name": "Pods", "description": "Pod 查询与操作"},
     {"name": "Alerts", "description": "告警"},
+    {"name": "Audits", "description": "操作审计"},
     {"name": "Logs", "description": "日志"},
 ]
 
 
 def build_openapi_spec() -> dict:
-    # 按业务类型合并 OpenAPI paths，避免 docs/routes.py 越堆越大。
     paths = {}
     for section_paths in (
         SYSTEM_PATHS,
@@ -38,6 +39,7 @@ def build_openapi_spec() -> dict:
         RESOURCE_PATHS,
         POD_PATHS,
         ALERT_PATHS,
+        AUDIT_PATHS,
         LOG_PATHS,
     ):
         paths.update(section_paths)
@@ -47,7 +49,7 @@ def build_openapi_spec() -> dict:
         "info": {
             "title": "聚时 AI 推理资源管理平台 API",
             "version": "0.1.0",
-            "description": "一期开发接口调试文档，覆盖用户、部署、端口、资源、Pod、告警和日志接口。",
+            "description": "一期开发接口调试文档，覆盖用户、部署、端口、资源、Pod、告警、审计和日志接口。",
         },
         "servers": [
             {"url": "/", "description": "Current host"},

@@ -7,10 +7,12 @@ try:
     from backend.config import Config
     from backend.services.paas_client import PaasClient
     from backend.services.k8s_client import K8sClient
+    from backend.db.mysql import get_connection
 except ModuleNotFoundError:
     from config import Config
     from services.paas_client import PaasClient
     from services.k8s_client import K8sClient
+    from db.mysql import get_connection
 
 
 GPU_RESOURCE_META = {
@@ -94,6 +96,179 @@ def _k8s_client():
     if not client.token:
         return None, _error("K8S_TOKEN is not configured", 500)
     return client, None
+
+
+def _snapshot_enabled():
+    return os.getenv("RESOURCE_SNAPSHOT_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+
+
+def _snapshot_interval_seconds():
+    try:
+        return max(int(os.getenv("RESOURCE_SNAPSHOT_MIN_INTERVAL_SECONDS", "60")), 10)
+    except ValueError:
+        return 60
+
+
+def _json_dumps(data):
+    return json.dumps(data, ensure_ascii=False, default=str)
+
+
+def _json_loads(value):
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, (bytes, bytearray)):
+        value = value.decode("utf-8", errors="ignore")
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except Exception:
+            return {}
+    return {}
+
+
+def _to_datetime(value):
+    if isinstance(value, datetime):
+        return value
+
+    if isinstance(value, str):
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                return datetime.strptime(value[:19], fmt)
+            except ValueError:
+                continue
+
+    return None
+
+
+def _save_resource_snapshot(snapshot_type, payload):
+    """
+    保存资源快照到 resource_snapshot。
+
+    注意：
+    1. 这个动作不能影响主接口返回，所以所有异常都吞掉。
+    2. 默认同一种 snapshot_type 每 60 秒最多写一次，避免前端刷新导致数据库爆量。
+    """
+    if not _snapshot_enabled():
+        return False
+
+    try:
+        conn = get_connection()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT created_at
+                FROM resource_snapshot
+                WHERE snapshot_type = %s
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (snapshot_type,),
+            )
+            latest = cursor.fetchone()
+
+            latest_time = _to_datetime(latest.get("created_at")) if latest else None
+            if latest_time:
+                elapsed = (datetime.now() - latest_time).total_seconds()
+                if elapsed < _snapshot_interval_seconds():
+                    return False
+
+            cursor.execute(
+                """
+                INSERT INTO resource_snapshot (snapshot_type, payload)
+                VALUES (%s, %s)
+                """,
+                (snapshot_type, _json_dumps(payload)),
+            )
+            return True
+    except Exception:
+        return False
+
+
+def _load_resource_snapshots(snapshot_type, start_time, limit=500):
+    try:
+        conn = get_connection()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT payload, created_at
+                FROM resource_snapshot
+                WHERE snapshot_type = %s
+                  AND created_at >= %s
+                ORDER BY created_at ASC
+                LIMIT %s
+                """,
+                (snapshot_type, start_time, int(limit)),
+            )
+            rows = cursor.fetchall() or []
+    except Exception:
+        return []
+
+    result = []
+    for row in rows:
+        payload = _json_loads(row.get("payload"))
+        created_at = _to_datetime(row.get("created_at"))
+        if not payload or not created_at:
+            continue
+        result.append({
+            "payload": payload,
+            "created_at": created_at,
+        })
+
+    return result
+
+
+def _trend_start_time(range_value):
+    now = datetime.now()
+
+    if range_value == "24h":
+        return now - timedelta(hours=24)
+
+    if range_value == "7d":
+        return now - timedelta(days=7)
+
+    return now - timedelta(hours=1)
+
+
+def _trend_time_label(created_at, range_value):
+    if range_value == "7d":
+        return created_at.strftime("%m-%d")
+    return created_at.strftime("%H:%M")
+
+
+def _trend_items_from_snapshots(snapshots, range_value):
+    items = []
+
+    for row in snapshots:
+        payload = row.get("payload") or {}
+        cards = payload.get("cards") or {}
+        created_at = row.get("created_at")
+
+        if not created_at:
+            continue
+
+        gpu_mem_alloc_percent = cards.get("gpu_mem_alloc_percent", cards.get("gpu_mem_percent", 0))
+        gpu_core_alloc_percent = cards.get("gpu_core_alloc_percent", cards.get("gpu_core_percent", 0))
+
+        items.append({
+            "time": _trend_time_label(created_at, range_value),
+
+            "gpu_alloc_percent": cards.get("gpu_alloc_percent", 0),
+            "vgpu_alloc_percent": cards.get("vgpu_alloc_percent", 0),
+
+            "gpu_mem_percent": gpu_mem_alloc_percent,
+            "gpu_mem_alloc_percent": gpu_mem_alloc_percent,
+            "gpu_mem_usage_percent": cards.get("gpu_mem_usage_percent"),
+
+            "gpu_core_percent": gpu_core_alloc_percent,
+            "gpu_core_alloc_percent": gpu_core_alloc_percent,
+            "gpu_core_usage_percent": cards.get("gpu_core_usage_percent"),
+
+            "usage_metric_ready": cards.get("usage_metric_ready", False),
+        })
+
+    return items
 
 
 def _safe_get(obj, *keys, default=None):
@@ -216,7 +391,7 @@ def _parse_gpumem_mib(value):
     if text.endswith("M"):
         return int(_parse_number(text[:-1]) * 1000 * 1000 / 1024 / 1024)
 
-    # HAMI 的 nvidia.com/gpumem 常见是纯数字，按 MiB 处理
+    # HAMI 的 nvidia.com/gpumem 常见是纯数字，按 MiB 处理。
     return int(_parse_number(text))
 
 
@@ -667,7 +842,7 @@ def summary(query):
     )
     level = _health_level(max_percent)
 
-    return _ok({
+    result = _ok({
         "cluster": Config.DCE_CLUSTER,
         "namespace": context["namespace"],
         "collected_at": context["collected_at"],
@@ -685,6 +860,10 @@ def summary(query):
         },
         "diagnostics": context["diagnostics"],
     })
+
+    _save_resource_snapshot("summary", result)
+
+    return result
 
 
 def nodes(query):
@@ -1003,6 +1182,24 @@ def cards(query):
 
 
 def trend(query):
+    range_value = query.get("range") or "1h"
+    start_time = _trend_start_time(range_value)
+
+    snapshots = _load_resource_snapshots("summary", start_time)
+    snapshot_items = _trend_items_from_snapshots(snapshots, range_value)
+
+    if len(snapshot_items) >= 2:
+        return _ok({
+            "range": range_value,
+            "items": snapshot_items,
+            "data_source": "resource_snapshot",
+            "metric_source": METRIC_SOURCE,
+            "usage_metric_ready": any(item.get("usage_metric_ready") for item in snapshot_items),
+            "need_history_collector": False,
+            "snapshot_count": len(snapshot_items),
+            "note": "Trend data is loaded from resource_snapshot history.",
+        })
+
     summary_result = summary(query)
     if not summary_result.get("is_success"):
         return summary_result
@@ -1015,6 +1212,7 @@ def trend(query):
         t = now - timedelta(minutes=10 * i)
         items.append({
             "time": t.strftime("%H:%M"),
+
             "gpu_alloc_percent": cards_data.get("gpu_alloc_percent", 0),
             "vgpu_alloc_percent": cards_data.get("vgpu_alloc_percent", 0),
 
@@ -1025,16 +1223,19 @@ def trend(query):
             "gpu_core_percent": cards_data.get("gpu_core_alloc_percent", 0),
             "gpu_core_alloc_percent": cards_data.get("gpu_core_alloc_percent", 0),
             "gpu_core_usage_percent": None,
+
+            "usage_metric_ready": False,
         })
 
     return _ok({
-        "range": query.get("range") or "1h",
+        "range": range_value,
         "items": items,
         "data_source": "current_resource_snapshot",
         "metric_source": METRIC_SOURCE,
         "usage_metric_ready": False,
         "need_history_collector": True,
-        "note": "Current response is generated from the latest resource snapshot. Historical samples require collector integration.",
+        "snapshot_count": len(snapshot_items),
+        "note": "Historical samples are not enough. Current response is generated from the latest resource snapshot.",
     })
 
 

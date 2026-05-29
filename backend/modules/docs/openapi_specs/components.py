@@ -393,6 +393,24 @@ COMPONENTS = {
                 }
             },
         },
+        "AlertHistoryBody": {
+            "required": False,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/AlertHistoryRequest"},
+                    "example": {
+                        "msg_id": "alerts-history-001",
+                        "serial": "serial-001",
+                        "context": "list alert history",
+                        "content": {
+                            "status": "resolved",
+                            "page": 1,
+                            "page_size": 20,
+                        },
+                    },
+                }
+            },
+        },
         "AlertCreateBody": {
             "required": True,
             "content": {
@@ -616,6 +634,27 @@ COMPONENTS = {
                         "namespace": {"type": "string", "example": "all"},
                         "level": {"type": "string", "enum": ["all", "high", "medium", "low"], "example": "all"},
                         "status": {"type": "string", "enum": ["open", "resolved", "ignored"], "example": "open"},
+                        "deployment_name": {"type": "string", "example": "nvidia-cuda-xxxxxx"},
+                        "page": {"type": "integer", "example": 1},
+                        "page_size": {"type": "integer", "example": 20},
+                    },
+                },
+            },
+        },
+        "AlertHistoryRequest": {
+            "type": "object",
+            "description": "Request body is optional. Empty body or {} means resolved and ignored alert history, page=1, page_size=20. This endpoint does not scan Kubernetes.",
+            "properties": {
+                "msg_id": {"type": "string", "example": "alerts-history-001"},
+                "serial": {"type": "string", "example": "serial-001"},
+                "context": {"type": "string", "example": "list alert history"},
+                "content": {
+                    "type": "object",
+                    "properties": {
+                        "cluster_name": {"type": "string", "example": "kpanda-global-cluster"},
+                        "namespace": {"type": "string", "example": "all"},
+                        "level": {"type": "string", "enum": ["all", "high", "medium", "low"], "example": "all"},
+                        "status": {"type": "string", "enum": ["resolved", "ignored"], "example": "resolved"},
                         "deployment_name": {"type": "string", "example": "nvidia-cuda-xxxxxx"},
                         "page": {"type": "integer", "example": 1},
                         "page_size": {"type": "integer", "example": 20},

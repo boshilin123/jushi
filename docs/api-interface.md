@@ -1536,9 +1536,65 @@ POST /api/alerts/list
 - 集群级扫描依赖 K8s token 对 `pods`、`events`、`nodes` 具备 `list` 权限；无权限时 `scan_error` 会说明原因，列表仍返回数据库中已有告警。
 - 当前 ServiceAccount 为 `system:serviceaccount:algorithm:jushi-deploy-api` 时，可应用 `docs/jushi-alert-cluster-read-rbac.yaml` 授权全集群只读告警扫描。
 - `instance_name` 优先来自 `deploy_instance.instance_name`，`deployment_name` 来自 Pod 的 `app` label。
-- `ignored` 状态不会被自动扫描重新打开，可用于前端“静默处理”。
+- `resolved` 和 `ignored` 状态不会被自动扫描重新打开；如需恢复为未处理，调用 `/api/alerts/reopen`。
 
-### 9.2 创建告警
+### 9.2 告警历史记录
+
+```http
+POST /api/alerts/history
+```
+
+当前状态：后端已实现。只从数据库查询 `resolved` 和 `ignored` 告警，不触发 Kubernetes 集群扫描，用于历史记录列表展示和后续恢复操作。
+
+请求体可为空。空对象 `{}` 或不传 JSON body 时，默认查询全部已解决和已忽略告警；也可传 `status = resolved` 或 `status = ignored` 单独筛选。
+
+请求：
+
+```json
+{
+  "status": "resolved",
+  "page": 1,
+  "page_size": 20
+}
+```
+
+响应：
+
+```json
+{
+  "is_success": true,
+  "items": [
+    {
+      "id": "1",
+      "alert_type": "pod_pending",
+      "alert_level": "high",
+      "title": "GPU 资源不足",
+      "target_name": "nvidia-cuda-xxxxxx-abcde",
+      "cluster_name": "kpanda-global-cluster",
+      "namespace": "algorithm",
+      "deployment_name": "nvidia-cuda-xxxxxx",
+      "status": "resolved",
+      "created_at": "2026-05-28 19:41:02",
+      "last_seen_at": "2026-05-28 20:10:00",
+      "handled_at": "2026-05-28 20:15:00",
+      "resolved_at": "2026-05-28 20:15:00",
+      "resolver": "admin",
+      "occurrence_count": 3
+    }
+  ],
+  "summary": {
+    "resolved": 1,
+    "ignored": 0
+  },
+  "total": 1,
+  "page": 1,
+  "page_size": 20
+}
+```
+
+历史记录下的“恢复/重新打开”操作调用 `/api/alerts/reopen`。
+
+### 9.3 创建告警
 
 ```http
 POST /api/alerts/create
@@ -1567,13 +1623,13 @@ POST /api/alerts/create
 }
 ```
 
-### 9.3 解决告警
+### 9.4 解决告警
 
 ```http
 POST /api/alerts/resolve
 ```
 
-当前状态：后端已实现。把告警状态更新为 `resolved`，记录处理人和解决时间。
+当前状态：后端已实现。把告警状态更新为 `resolved`，记录处理人和解决时间。后续自动扫描不会重新打开该指纹告警，除非显式调用重新打开接口。
 
 请求：
 
@@ -1593,7 +1649,7 @@ POST /api/alerts/resolve
 }
 ```
 
-### 9.4 忽略告警
+### 9.5 忽略告警
 
 ```http
 POST /api/alerts/ignore
@@ -1616,6 +1672,32 @@ POST /api/alerts/ignore
 {
   "is_success": true,
   "status": "ignored"
+}
+```
+
+### 9.6 重新打开告警
+
+```http
+POST /api/alerts/reopen
+```
+
+当前状态：后端已实现。把 `resolved` 或 `ignored` 的告警恢复为 `open`，并清空处理人和解决时间。
+
+请求：
+
+```json
+{
+  "id": "alert-001",
+  "resolver": "admin"
+}
+```
+
+响应：
+
+```json
+{
+  "is_success": true,
+  "status": "open"
 }
 ```
 

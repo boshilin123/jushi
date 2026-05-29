@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS alert_event (
   status VARCHAR(32) NOT NULL DEFAULT 'open' COMMENT '告警状态：open 未处理，resolved 已解决，ignored 已忽略',
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   resolved_at DATETIME DEFAULT NULL COMMENT '解决时间',
+  handled_at DATETIME DEFAULT NULL COMMENT '处理时间，用于已解决和已忽略告警历史排序',
   resolver VARCHAR(64) DEFAULT NULL COMMENT '处理人用户名',
   KEY idx_alert_cluster_namespace (cluster_name, namespace),
   UNIQUE KEY uk_alert_fingerprint (fingerprint)

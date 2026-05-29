@@ -14,6 +14,7 @@ OPTIONAL_COLUMNS = {
     "deployment_name": "VARCHAR(128) NULL",
     "fingerprint": "VARCHAR(255) NULL",
     "last_seen_at": "DATETIME NULL",
+    "handled_at": "DATETIME NULL",
     "evidence": "JSON NULL",
     "occurrence_count": "INT NOT NULL DEFAULT 1",
 }
@@ -64,6 +65,7 @@ def _row_to_alert(row: dict) -> dict:
         "status": row.get("status"),
         "created_at": _fmt_dt(row.get("created_at")),
         "last_seen_at": _fmt_dt(row.get("last_seen_at")),
+        "handled_at": _fmt_dt(row.get("handled_at")),
         "resolved_at": _fmt_dt(row.get("resolved_at")),
         "resolver": row.get("resolver"),
         "occurrence_count": row.get("occurrence_count") or 1,
@@ -100,21 +102,22 @@ def upsert_detected_alerts(alerts: list[dict]) -> int:
                     )
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, 1, 'open')
                     ON DUPLICATE KEY UPDATE
-                        alert_level = IF(status = 'ignored', alert_level, VALUES(alert_level)),
-                        title = IF(status = 'ignored', title, VALUES(title)),
-                        message = IF(status = 'ignored', message, VALUES(message)),
-                        source = IF(status = 'ignored', source, VALUES(source)),
-                        target_name = IF(status = 'ignored', target_name, VALUES(target_name)),
-                        cluster_name = IF(status = 'ignored', cluster_name, VALUES(cluster_name)),
-                        namespace = IF(status = 'ignored', namespace, VALUES(namespace)),
-                        instance_name = IF(status = 'ignored', instance_name, VALUES(instance_name)),
-                        deployment_name = IF(status = 'ignored', deployment_name, VALUES(deployment_name)),
-                        last_seen_at = IF(status = 'ignored', last_seen_at, NOW()),
-                        evidence = IF(status = 'ignored', evidence, VALUES(evidence)),
-                        occurrence_count = IF(status = 'ignored', occurrence_count, occurrence_count + 1),
-                        status = IF(status = 'ignored', status, 'open'),
-                        resolved_at = IF(status = 'ignored', resolved_at, NULL),
-                        resolver = IF(status = 'ignored', resolver, NULL)
+                        alert_level = IF(status IN ('ignored', 'resolved'), alert_level, VALUES(alert_level)),
+                        title = IF(status IN ('ignored', 'resolved'), title, VALUES(title)),
+                        message = IF(status IN ('ignored', 'resolved'), message, VALUES(message)),
+                        source = IF(status IN ('ignored', 'resolved'), source, VALUES(source)),
+                        target_name = IF(status IN ('ignored', 'resolved'), target_name, VALUES(target_name)),
+                        cluster_name = IF(status IN ('ignored', 'resolved'), cluster_name, VALUES(cluster_name)),
+                        namespace = IF(status IN ('ignored', 'resolved'), namespace, VALUES(namespace)),
+                        instance_name = IF(status IN ('ignored', 'resolved'), instance_name, VALUES(instance_name)),
+                        deployment_name = IF(status IN ('ignored', 'resolved'), deployment_name, VALUES(deployment_name)),
+                        last_seen_at = IF(status IN ('ignored', 'resolved'), last_seen_at, NOW()),
+                        evidence = IF(status IN ('ignored', 'resolved'), evidence, VALUES(evidence)),
+                        occurrence_count = IF(status IN ('ignored', 'resolved'), occurrence_count, occurrence_count + 1),
+                        status = IF(status IN ('ignored', 'resolved'), status, 'open'),
+                        resolved_at = IF(status IN ('ignored', 'resolved'), resolved_at, NULL),
+                        handled_at = IF(status IN ('ignored', 'resolved'), handled_at, NULL),
+                        resolver = IF(status IN ('ignored', 'resolved'), resolver, NULL)
                     """,
                     (
                         alert.get("alert_type"),
@@ -220,6 +223,75 @@ def list_alerts(query: dict):
     }
 
 
+def list_alert_history(query: dict):
+    ensure_alert_schema()
+    conditions = []
+    params = []
+    statuses = query.get("statuses") or ["resolved", "ignored"]
+    placeholders = ", ".join(["%s"] * len(statuses))
+    conditions.append(f"status IN ({placeholders})")
+    params.extend(statuses)
+
+    level = query.get("level")
+    if level and level != "all":
+        conditions.append("alert_level = %s")
+        params.append(level)
+    if query.get("deployment_name"):
+        conditions.append("deployment_name = %s")
+        params.append(query["deployment_name"])
+    if query.get("cluster_name"):
+        conditions.append("cluster_name = %s")
+        params.append(query["cluster_name"])
+    if query.get("namespace") and query.get("namespace") != "all":
+        conditions.append("namespace = %s")
+        params.append(query["namespace"])
+
+    page = max(int(query.get("page") or 1), 1)
+    page_size = max(min(int(query.get("page_size") or query.get("limit") or 20), 100), 1)
+    offset = (page - 1) * page_size
+    where_sql = f"WHERE {' AND '.join(conditions)}"
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT
+                    SUM(status = 'resolved') AS resolved_count,
+                    SUM(status = 'ignored') AS ignored_count
+                FROM alert_event
+                {where_sql}
+                """,
+                tuple(params),
+            )
+            summary = cur.fetchone() or {}
+            cur.execute(f"SELECT COUNT(*) AS total FROM alert_event {where_sql}", tuple(params))
+            total = (cur.fetchone() or {}).get("total", 0)
+            cur.execute(
+                f"""
+                SELECT *
+                FROM alert_event
+                {where_sql}
+                ORDER BY
+                    COALESCE(handled_at, resolved_at, last_seen_at, created_at) DESC,
+                    id DESC
+                LIMIT %s OFFSET %s
+                """,
+                tuple(params + [page_size, offset]),
+            )
+            rows = cur.fetchall() or []
+
+    return {
+        "items": [_row_to_alert(row) for row in rows],
+        "summary": {
+            "resolved": int(summary.get("resolved_count") or 0),
+            "ignored": int(summary.get("ignored_count") or 0),
+        },
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
+
+
 def create_alert(payload: dict):
     ensure_alert_schema()
     fingerprint = payload.get("fingerprint") or (
@@ -236,22 +308,33 @@ def update_alert_status(payload: dict, status: str):
     alert_id = payload.get("id")
     resolver = payload.get("resolver", "")
     if not alert_id:
-        return {"is_success": False, "msg": "id 不能为空"}
+        return {"is_success": False, "msg": "id cannot be empty"}
 
-    resolved_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S") if status == "resolved" else None
+    handled_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S") if status in {"resolved", "ignored"} else None
+    resolved_at = handled_at if status == "resolved" else None
+    saved_resolver = resolver if status in {"resolved", "ignored"} else None
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE alert_event
-                SET status = %s, resolver = %s, resolved_at = %s
+                SET status = %s, resolver = %s, resolved_at = %s, handled_at = %s
                 WHERE id = %s
                 """,
-                (status, resolver, resolved_at, alert_id),
+                (status, saved_resolver, resolved_at, handled_at, alert_id),
             )
             affected_rows = cur.rowcount
+            exists = True
+            if affected_rows <= 0:
+                cur.execute("SELECT id FROM alert_event WHERE id = %s", (alert_id,))
+                exists = cur.fetchone() is not None
 
-    if affected_rows <= 0:
-        return {"is_success": False, "msg": "告警不存在", "id": str(alert_id)}
-    msg = "已静默处理" if status == "ignored" else "已标记解决"
+    if not exists:
+        return {"is_success": False, "msg": "alert not found", "id": str(alert_id)}
+    messages = {
+        "ignored": "alert ignored",
+        "resolved": "alert resolved",
+        "open": "alert reopened",
+    }
+    msg = messages.get(status, "alert status updated")
     return {"is_success": True, "id": str(alert_id), "status": status, "msg": msg}

@@ -20,6 +20,16 @@ def normalize_alert_query(payload: dict) -> dict:
     }
 
 
+def normalize_alert_history_query(payload: dict) -> dict:
+    query = normalize_alert_query(payload)
+    status = query.get("status")
+    if status in {"resolved", "ignored"}:
+        query["statuses"] = [status]
+    else:
+        query["statuses"] = ["resolved", "ignored"]
+    return query
+
+
 def normalize_alert_action(payload: dict) -> dict:
     if not payload:
         return {}

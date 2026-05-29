@@ -1,6 +1,7 @@
+import json
+import os
 import time
 from datetime import datetime, timedelta
-
 
 try:
     from backend.config import Config
@@ -26,13 +27,13 @@ GPU_RESOURCE_META = {
         "unit": "vGPU",
     },
     "nvidia.com/gpucores": {
-        "display_name": "GPU 算力",
+        "display_name": "GPU Compute",
         "vendor": "NVIDIA",
         "kind": "gpu_core",
         "unit": "core",
     },
     "nvidia.com/gpumem": {
-        "display_name": "GPU 显存",
+        "display_name": "GPU Memory",
         "vendor": "NVIDIA",
         "kind": "gpu_memory",
         "unit": "MiB",
@@ -48,6 +49,9 @@ GPU_RESOURCE_META = {
 GPU_COUNT_KEYS = ["nvidia.com/vgpu", "nvidia.com/gpu", "huawei.com/Ascend310P"]
 GPU_MEMORY_KEYS = ["nvidia.com/gpumem"]
 GPU_CORE_KEYS = ["nvidia.com/gpucores"]
+
+UNKNOWN_GPU_MODEL = "Unknown"
+METRIC_SOURCE = "paas_cluster_resourceSummary + k8s_node_fallback + pod_resource_fallback"
 
 
 def _now():
@@ -77,18 +81,18 @@ def _error(msg, status_code=500, response=None):
 
 def _paas_client():
     if not Config.DCE_API_BASE:
-        return None, _error("DCE_API_BASE 未配置", 500)
+        return None, _error("DCE_API_BASE is not configured", 500)
     if not Config.DCE_TOKEN:
-        return None, _error("DCE_TOKEN 未配置", 500)
+        return None, _error("DCE_TOKEN is not configured", 500)
     return PaasClient(Config.DCE_API_BASE, Config.DCE_TOKEN), None
 
 
 def _k8s_client():
     client = K8sClient.from_config(Config)
     if not client.api_base:
-        return None, _error("K8S_API_BASE 未配置", 500)
+        return None, _error("K8S_API_BASE is not configured", 500)
     if not client.token:
-        return None, _error("K8S_TOKEN 未配置", 500)
+        return None, _error("K8S_TOKEN is not configured", 500)
     return client, None
 
 
@@ -212,7 +216,7 @@ def _parse_gpumem_mib(value):
     if text.endswith("M"):
         return int(_parse_number(text[:-1]) * 1000 * 1000 / 1024 / 1024)
 
-    # HAMI 的 nvidia.com/gpumem 常见是纯数字，按 MiB 处理。
+    # HAMI 的 nvidia.com/gpumem 常见是纯数字，按 MiB 处理
     return int(_parse_number(text))
 
 
@@ -278,28 +282,27 @@ def _health_text(level):
     }.get(level, "未知")
 
 
+def _add_resource(target, key, value):
+    parsed = value if isinstance(value, (int, float)) else _parse_resource(key, value)
+    if parsed <= 0:
+        return
+    target[key] = target.get(key, 0) + parsed
+
+
 def _merge_resource_totals(primary, fallback):
     """
-    primary 通常来自 PaaS cluster resourceSummary。
-    fallback 通常来自 K8S Node / Pod 反推。
+    primary 通常来自 PaaS resourceSummary。
+    fallback 通常来自 K8S Node / Pod 资源反推。
     规则：primary 有值优先；primary 没有或为 0 时，用 fallback 补齐。
     """
     merged = dict(primary or {})
     fallback = fallback or {}
 
     for key, value in fallback.items():
-        current = _resource_get(merged, key)
-        if current <= 0:
+        if _resource_get(merged, key) <= 0:
             merged[key] = value
 
     return merged
-
-
-def _add_resource(target, key, value):
-    parsed = value if isinstance(value, (int, float)) else _parse_resource(key, value)
-    if parsed <= 0:
-        return
-    target[key] = target.get(key, 0) + parsed
 
 
 def _get_resource_summary_from_cluster(cluster):
@@ -324,7 +327,7 @@ def _get_cluster_resource_summary():
 
     status, result = client.request_with_status("GET", f"/clusters/{Config.DCE_CLUSTER}")
     if not 200 <= status < 300:
-        return None, _error("集群资源汇总查询失败", status, result)
+        return None, _error("Failed to query cluster resource summary", status, result)
 
     allocatable, allocated = _get_resource_summary_from_cluster(result)
 
@@ -339,10 +342,9 @@ def _get_cluster_resource_summary():
 def _list_nodes_from_paas(client):
     status, result = client.request_with_status("GET", f"/clusters/{Config.DCE_CLUSTER}/nodes")
     if not 200 <= status < 300:
-        return None, _error("PaaS 节点列表查询失败", status, result)
+        return None, _error("Failed to query PaaS node list", status, result)
 
-    items = _extract_items(result)
-    return items, None
+    return _extract_items(result), None
 
 
 def _list_nodes_from_k8s():
@@ -352,14 +354,14 @@ def _list_nodes_from_k8s():
 
     status, result = client._request("GET", "/api/v1/nodes")
     if not 200 <= status < 300:
-        return None, _error("K8S 节点列表查询失败", status, result)
+        return None, _error("Failed to query Kubernetes node list", status, result)
 
     return _extract_items(result), None
 
 
 def _list_nodes(client):
     paas_nodes, paas_error = _list_nodes_from_paas(client)
-    if paas_nodes is not None and len(paas_nodes) > 0:
+    if paas_nodes:
         return paas_nodes, None
 
     k8s_nodes, k8s_error = _list_nodes_from_k8s()
@@ -379,7 +381,7 @@ def _list_namespace_pods(namespace):
 
     status, result = client.list_pods(namespace)
     if not 200 <= status < 300:
-        return [], _error("Pod 列表查询失败", status, result)
+        return [], _error("Failed to query pod list", status, result)
 
     return _extract_items(result), None
 
@@ -430,11 +432,8 @@ def _pod_resources(pod):
     containers = _safe_get(pod, "spec", "containers", default=[]) or []
     for container in containers:
         resources = container.get("resources") or {}
-        limits = resources.get("limits") or {}
-        requests = resources.get("requests") or {}
-
-        merged = dict(requests)
-        merged.update(limits)
+        merged = dict(resources.get("requests") or {})
+        merged.update(resources.get("limits") or {})
 
         for key, value in merged.items():
             _add_resource(result, key, value)
@@ -468,9 +467,10 @@ def _aggregate_node_resources(raw_nodes, pod_allocated_by_node):
     for node in raw_nodes:
         node_name = _node_name(node)
         allocatable = _node_allocatable(node)
-        paas_allocated = _node_allocated_from_paas(node)
-        pod_allocated = pod_allocated_by_node.get(node_name, {})
-        allocated = _merge_resource_totals(paas_allocated, pod_allocated)
+        allocated = _merge_resource_totals(
+            _node_allocated_from_paas(node),
+            pod_allocated_by_node.get(node_name, {}),
+        )
 
         for key, value in allocatable.items():
             _add_resource(allocatable_total, key, value)
@@ -481,7 +481,30 @@ def _aggregate_node_resources(raw_nodes, pod_allocated_by_node):
     return allocatable_total, allocated_total
 
 
+def _gpu_model_node_map():
+    """
+    可选配置：
+    GPU_MODEL_NODE_MAP='{"node-gpu-01":"NVIDIA T4","node-gpu-02":"NVIDIA A100"}'
+
+    用于节点 label 不完整时，人工补齐显卡型号展示。
+    """
+    raw = os.getenv("GPU_MODEL_NODE_MAP") or ""
+    if not raw.strip():
+        return {}
+
+    try:
+        value = json.loads(raw)
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+
 def _extract_gpu_model(node):
+    node_name = _node_name(node)
+    node_map = _gpu_model_node_map()
+    if node_name in node_map:
+        return str(node_map[node_name])
+
     labels = _node_labels(node)
     capacity = _node_capacity(node)
     allocatable = _node_allocatable(node)
@@ -501,14 +524,25 @@ def _extract_gpu_model(node):
         if value:
             return str(value).replace("_", " ")
 
-    if _parse_resource("huawei.com/Ascend310P", capacity.get("huawei.com/Ascend310P") or allocatable.get("huawei.com/Ascend310P")):
+    if _parse_resource(
+        "huawei.com/Ascend310P",
+        capacity.get("huawei.com/Ascend310P") or allocatable.get("huawei.com/Ascend310P"),
+    ):
         return "Ascend 310P"
-    if _parse_resource("nvidia.com/vgpu", capacity.get("nvidia.com/vgpu") or allocatable.get("nvidia.com/vgpu")):
+
+    if _parse_resource(
+        "nvidia.com/vgpu",
+        capacity.get("nvidia.com/vgpu") or allocatable.get("nvidia.com/vgpu"),
+    ):
         return "NVIDIA vGPU"
-    if _parse_resource("nvidia.com/gpu", capacity.get("nvidia.com/gpu") or allocatable.get("nvidia.com/gpu")):
+
+    if _parse_resource(
+        "nvidia.com/gpu",
+        capacity.get("nvidia.com/gpu") or allocatable.get("nvidia.com/gpu"),
+    ):
         return "NVIDIA GPU"
 
-    return "Unknown"
+    return UNKNOWN_GPU_MODEL
 
 
 def _node_status(node):
@@ -526,6 +560,7 @@ def _resource_context(query):
 
     client = snapshot["client"]
     namespace = query.get("namespace") or Config.DCE_NAMESPACE
+    collected_at = _now()
 
     raw_nodes, nodes_error = _list_nodes(client)
     pods, pod_error = _list_namespace_pods(namespace)
@@ -536,15 +571,6 @@ def _resource_context(query):
         pod_allocated_by_node,
     )
 
-    merged_allocatable = _merge_resource_totals(
-        snapshot["allocatable"],
-        node_allocatable_total,
-    )
-    merged_allocated = _merge_resource_totals(
-        snapshot["allocated"],
-        node_allocated_total,
-    )
-
     return {
         "client": client,
         "namespace": namespace,
@@ -552,27 +578,23 @@ def _resource_context(query):
         "raw_nodes": raw_nodes,
         "pods": pods,
         "pod_allocated_by_node": pod_allocated_by_node,
-        "allocatable": merged_allocatable,
-        "allocated": merged_allocated,
+        "allocatable": _merge_resource_totals(snapshot["allocatable"], node_allocatable_total),
+        "allocated": _merge_resource_totals(snapshot["allocated"], node_allocated_total),
+        "collected_at": collected_at,
+        "metric_source": METRIC_SOURCE,
         "diagnostics": {
             "nodes_error": nodes_error,
             "pod_error": pod_error,
-            "resource_source": "paas_cluster_resourceSummary + k8s_node_fallback + pod_resource_fallback",
+            "resource_source": METRIC_SOURCE,
+            "usage_metric_ready": False,
+            "usage_metric_source": "not_configured",
         },
     }, None
 
 
-def summary(query):
-    context, err = _resource_context(query)
-    if err:
-        return err
-
-    allocatable = context["allocatable"]
-    allocated = context["allocated"]
-
+def _resource_summary_cards(allocatable, allocated):
     gpu_total = _sum_resources(allocatable, GPU_COUNT_KEYS)
     gpu_used = _sum_resources(allocated, GPU_COUNT_KEYS)
-    gpu_available = max(gpu_total - gpu_used, 0)
 
     gpu_mem_key, gpu_mem_total_mib = _first_existing(allocatable, GPU_MEMORY_KEYS)
     gpu_mem_used_mib = _resource_get(allocated, gpu_mem_key) if gpu_mem_key else 0
@@ -580,63 +602,86 @@ def summary(query):
     gpu_core_key, gpu_core_total = _first_existing(allocatable, GPU_CORE_KEYS)
     gpu_core_used = _resource_get(allocated, gpu_core_key) if gpu_core_key else 0
 
+    vgpu_total = _resource_get(allocatable, "nvidia.com/vgpu")
+    vgpu_used = _resource_get(allocated, "nvidia.com/vgpu")
+
     cpu_total_m = _parse_cpu_m(allocatable.get("cpu"))
     cpu_used_m = _resource_get(allocated, "cpu")
 
     memory_total_bytes = _parse_memory_bytes(allocatable.get("memory"))
     memory_used_bytes = _resource_get(allocated, "memory")
 
-    gpu_percent = _percent(gpu_used, gpu_total)
-    gpu_mem_percent = _percent(gpu_mem_used_mib, gpu_mem_total_mib)
-    gpu_core_percent = _percent(gpu_core_used, gpu_core_total)
+    gpu_core_alloc_percent = _percent(gpu_core_used, gpu_core_total)
+    gpu_mem_alloc_percent = _percent(gpu_mem_used_mib, gpu_mem_total_mib)
 
-    max_percent = max(gpu_percent, gpu_mem_percent, gpu_core_percent)
+    return {
+        "gpu_total": gpu_total,
+        "gpu_used": gpu_used,
+        "gpu_available": max(gpu_total - gpu_used, 0),
+        "gpu_alloc_percent": _percent(gpu_used, gpu_total),
+
+        "vgpu_total": vgpu_total,
+        "vgpu_used": vgpu_used,
+        "vgpu_available": max(vgpu_total - vgpu_used, 0),
+        "vgpu_alloc_percent": _percent(vgpu_used, vgpu_total),
+
+        "gpu_core_total": gpu_core_total,
+        "gpu_core_used": gpu_core_used,
+        "gpu_core_alloc_percent": gpu_core_alloc_percent,
+        "gpu_core_percent": gpu_core_alloc_percent,
+        "gpu_core_usage_percent": None,
+
+        "gpu_mem_total_gib": _mib_to_gib(gpu_mem_total_mib),
+        "gpu_mem_used_gib": _mib_to_gib(gpu_mem_used_mib),
+        "gpu_mem_alloc_percent": gpu_mem_alloc_percent,
+        "gpu_mem_percent": gpu_mem_alloc_percent,
+        "gpu_mem_usage_percent": None,
+
+        "cpu_total_m": cpu_total_m,
+        "cpu_used_m": cpu_used_m,
+        "cpu_percent": _percent(cpu_used_m, cpu_total_m),
+
+        "memory_total_gib": _bytes_to_gib(memory_total_bytes),
+        "memory_used_gib": _bytes_to_gib(memory_used_bytes),
+        "memory_percent": _percent(memory_used_bytes, memory_total_bytes),
+
+        "usage_metric_ready": False,
+        "usage_metric_source": "not_configured",
+        "allocation_metric_source": METRIC_SOURCE,
+    }
+
+
+def summary(query):
+    context, err = _resource_context(query)
+    if err:
+        return err
+
+    cards = _resource_summary_cards(context["allocatable"], context["allocated"])
+    cards["node_count"] = len(context["raw_nodes"])
+
+    max_percent = max(
+        cards.get("gpu_alloc_percent", 0),
+        cards.get("vgpu_alloc_percent", 0),
+        cards.get("gpu_core_alloc_percent", 0),
+        cards.get("gpu_mem_alloc_percent", 0),
+    )
     level = _health_level(max_percent)
-
-    vgpu_total = _resource_get(allocatable, "nvidia.com/vgpu")
-    vgpu_used = _resource_get(allocated, "nvidia.com/vgpu")
 
     return _ok({
         "cluster": Config.DCE_CLUSTER,
         "namespace": context["namespace"],
+        "collected_at": context["collected_at"],
+        "metric_source": context["metric_source"],
         "health": {
             "level": level,
             "text": _health_text(level),
             "score": max(0, 100 - max_percent // 2),
             "message": "资源调度健康" if level == "green" else "部分资源接近高负载",
         },
-        "cards": {
-            "node_count": len(context["raw_nodes"]),
-
-            "gpu_total": gpu_total,
-            "gpu_used": gpu_used,
-            "gpu_available": gpu_available,
-            "gpu_alloc_percent": gpu_percent,
-
-            "vgpu_total": vgpu_total,
-            "vgpu_used": vgpu_used,
-            "vgpu_available": max(vgpu_total - vgpu_used, 0),
-            "vgpu_alloc_percent": _percent(vgpu_used, vgpu_total),
-
-            "gpu_core_total": gpu_core_total,
-            "gpu_core_used": gpu_core_used,
-            "gpu_core_percent": gpu_core_percent,
-
-            "gpu_mem_total_gib": _mib_to_gib(gpu_mem_total_mib),
-            "gpu_mem_used_gib": _mib_to_gib(gpu_mem_used_mib),
-            "gpu_mem_percent": gpu_mem_percent,
-
-            "cpu_total_m": cpu_total_m,
-            "cpu_used_m": cpu_used_m,
-            "cpu_percent": _percent(cpu_used_m, cpu_total_m),
-
-            "memory_total_gib": _bytes_to_gib(memory_total_bytes),
-            "memory_used_gib": _bytes_to_gib(memory_used_bytes),
-            "memory_percent": _percent(memory_used_bytes, memory_total_bytes),
-        },
+        "cards": cards,
         "raw_resource_keys": {
-            "allocatable": sorted(list((allocatable or {}).keys())),
-            "allocated": sorted(list((allocated or {}).keys())),
+            "allocatable": sorted(list((context["allocatable"] or {}).keys())),
+            "allocated": sorted(list((context["allocated"] or {}).keys())),
         },
         "diagnostics": context["diagnostics"],
     })
@@ -652,28 +697,20 @@ def nodes(query):
     for node in context["raw_nodes"]:
         node_name = _node_name(node)
         allocatable = _node_allocatable(node)
-        paas_allocated = _node_allocated_from_paas(node)
-        pod_allocated = context["pod_allocated_by_node"].get(node_name, {})
-        allocated = _merge_resource_totals(paas_allocated, pod_allocated)
+        allocated = _merge_resource_totals(
+            _node_allocated_from_paas(node),
+            context["pod_allocated_by_node"].get(node_name, {}),
+        )
 
-        gpu_total = _sum_resources(allocatable, GPU_COUNT_KEYS)
-        gpu_used = _sum_resources(allocated, GPU_COUNT_KEYS)
+        cards = _resource_summary_cards(allocatable, allocated)
 
-        gpu_mem_key, gpu_mem_total_mib = _first_existing(allocatable, GPU_MEMORY_KEYS)
-        gpu_mem_used_mib = _resource_get(allocated, gpu_mem_key) if gpu_mem_key else 0
-
-        gpu_core_key, gpu_core_total = _first_existing(allocatable, GPU_CORE_KEYS)
-        gpu_core_used = _resource_get(allocated, gpu_core_key) if gpu_core_key else 0
-
-        gpu_percent = _percent(gpu_used, gpu_total)
-        gpu_mem_percent = _percent(gpu_mem_used_mib, gpu_mem_total_mib)
-        gpu_core_percent = _percent(gpu_core_used, gpu_core_total)
-
-        max_percent = max(gpu_percent, gpu_mem_percent, gpu_core_percent)
+        max_percent = max(
+            cards.get("gpu_alloc_percent", 0),
+            cards.get("vgpu_alloc_percent", 0),
+            cards.get("gpu_core_alloc_percent", 0),
+            cards.get("gpu_mem_alloc_percent", 0),
+        )
         level = _health_level(max_percent)
-
-        vgpu_total = _resource_get(allocatable, "nvidia.com/vgpu")
-        vgpu_used = _resource_get(allocated, "nvidia.com/vgpu")
 
         item = {
             "node_name": node_name,
@@ -681,30 +718,40 @@ def nodes(query):
             "health_level": level,
             "health_text": _health_text(level),
             "gpu_model": _extract_gpu_model(node),
+            "collected_at": context["collected_at"],
+            "metric_source": context["metric_source"],
 
-            "gpu_total": gpu_total,
-            "gpu_used": gpu_used,
-            "gpu_available": max(gpu_total - gpu_used, 0),
-            "gpu_percent": gpu_percent,
+            "gpu_total": cards["gpu_total"],
+            "gpu_used": cards["gpu_used"],
+            "gpu_available": cards["gpu_available"],
+            "gpu_percent": cards["gpu_alloc_percent"],
+            "gpu_alloc_percent": cards["gpu_alloc_percent"],
 
-            "vgpu_total": vgpu_total,
-            "vgpu_used": vgpu_used,
-            "vgpu_available": max(vgpu_total - vgpu_used, 0),
-            "vgpu_percent": _percent(vgpu_used, vgpu_total),
+            "vgpu_total": cards["vgpu_total"],
+            "vgpu_used": cards["vgpu_used"],
+            "vgpu_available": cards["vgpu_available"],
+            "vgpu_percent": cards["vgpu_alloc_percent"],
+            "vgpu_alloc_percent": cards["vgpu_alloc_percent"],
 
-            "gpu_core_total": gpu_core_total,
-            "gpu_core_used": gpu_core_used,
-            "gpu_core_percent": gpu_core_percent,
+            "gpu_core_total": cards["gpu_core_total"],
+            "gpu_core_used": cards["gpu_core_used"],
+            "gpu_core_percent": cards["gpu_core_alloc_percent"],
+            "gpu_core_alloc_percent": cards["gpu_core_alloc_percent"],
+            "gpu_core_usage_percent": None,
 
-            "gpu_mem_total_gib": _mib_to_gib(gpu_mem_total_mib),
-            "gpu_mem_used_gib": _mib_to_gib(gpu_mem_used_mib),
-            "gpu_mem_percent": gpu_mem_percent,
+            "gpu_mem_total_gib": cards["gpu_mem_total_gib"],
+            "gpu_mem_used_gib": cards["gpu_mem_used_gib"],
+            "gpu_mem_percent": cards["gpu_mem_alloc_percent"],
+            "gpu_mem_alloc_percent": cards["gpu_mem_alloc_percent"],
+            "gpu_mem_usage_percent": None,
 
-            "cpu_total_m": _parse_cpu_m(allocatable.get("cpu")),
-            "cpu_used_m": _resource_get(allocated, "cpu"),
+            "cpu_total_m": cards["cpu_total_m"],
+            "cpu_used_m": cards["cpu_used_m"],
+            "memory_total_gib": cards["memory_total_gib"],
+            "memory_used_gib": cards["memory_used_gib"],
 
-            "memory_total_gib": _bytes_to_gib(_parse_memory_bytes(allocatable.get("memory"))),
-            "memory_used_gib": _bytes_to_gib(_resource_get(allocated, "memory")),
+            "usage_metric_ready": False,
+            "usage_metric_source": "not_configured",
 
             "allocatable": {
                 key: allocatable.get(key)
@@ -728,16 +775,18 @@ def nodes(query):
 
     items.sort(
         key=lambda item: max(
-            item.get("vgpu_percent", 0),
-            item.get("gpu_percent", 0),
-            item.get("gpu_mem_percent", 0),
-            item.get("gpu_core_percent", 0),
+            item.get("vgpu_alloc_percent", 0),
+            item.get("gpu_alloc_percent", 0),
+            item.get("gpu_mem_alloc_percent", 0),
+            item.get("gpu_core_alloc_percent", 0),
         ),
         reverse=True,
     )
 
     return _ok({
         "namespace": context["namespace"],
+        "collected_at": context["collected_at"],
+        "metric_source": context["metric_source"],
         "items": items,
         "total": len(items),
         "diagnostics": context["diagnostics"],
@@ -749,17 +798,16 @@ def gpus(query):
     if err:
         return err
 
-    allocatable = context["allocatable"]
-    allocated = context["allocated"]
-
     resources = []
+
     for key, meta in GPU_RESOURCE_META.items():
-        total = _resource_get(allocatable, key)
-        used = _resource_get(allocated, key)
+        total = _resource_get(context["allocatable"], key)
+        used = _resource_get(context["allocated"], key)
 
         if total <= 0 and used <= 0:
             continue
 
+        percent = _percent(used, total)
         resources.append({
             "resource_name": key,
             "display_name": meta["display_name"],
@@ -769,10 +817,15 @@ def gpus(query):
             "total": total,
             "used": used,
             "available": max(total - used, 0),
-            "percent": _percent(used, total),
+            "percent": percent,
+            "alloc_percent": percent,
+            "usage_percent": None,
+            "usage_metric_ready": False,
         })
 
     model_map = {}
+    unknown_nodes = []
+
     for node in context["raw_nodes"]:
         model = _extract_gpu_model(node)
         allocatable = _node_allocatable(node)
@@ -788,6 +841,9 @@ def gpus(query):
 
         model_map[model] = model_map.get(model, 0) + count
 
+        if model == UNKNOWN_GPU_MODEL:
+            unknown_nodes.append(_node_name(node))
+
     category_items = [
         {"model": model, "count": count}
         for model, count in model_map.items()
@@ -798,9 +854,13 @@ def gpus(query):
     top_nodes = top_nodes_result.get("items", [])[:5] if top_nodes_result.get("is_success") else []
 
     return _ok({
+        "collected_at": context["collected_at"],
+        "metric_source": context["metric_source"],
         "resources": resources,
         "category_items": category_items,
         "top_nodes": top_nodes,
+        "unknown_model_nodes": unknown_nodes,
+        "model_map_configured": bool(_gpu_model_node_map()),
         "diagnostics": context["diagnostics"],
     })
 
@@ -834,13 +894,15 @@ def cards(query):
         if physical_gpu_total > 0:
             card_count = physical_gpu_total
             data_precision = "physical_gpu_estimated"
+            mapping_rule = "physical GPU resource count"
         elif vgpu_total > 0:
-            # 当前没有真实物理卡 UUID 时，按 1 GPU = 2 vGPU 估算展示卡片数量。
             card_count = max((vgpu_total + 1) // 2, 1)
             data_precision = "vgpu_estimated"
+            mapping_rule = "1 GPU = 2 vGPU"
         else:
             card_count = 1
             data_precision = "node_resource_snapshot"
+            mapping_rule = "node resource snapshot"
 
         for index in range(card_count):
             card_status = "空闲"
@@ -859,26 +921,34 @@ def cards(query):
                 "card_status": card_status,
                 "usage_mode": "vGPU 后台调度" if vgpu_total > 0 else "物理 GPU 调度",
                 "node_name": node_name,
-                "gpu_model": node.get("gpu_model") or "Unknown",
+                "gpu_model": node.get("gpu_model") or UNKNOWN_GPU_MODEL,
+
                 "vgpu": {
                     "allocated": node.get("vgpu_used", 0),
                     "total": node.get("vgpu_total", 0),
-                    "percent": node.get("vgpu_percent", 0),
+                    "percent": node.get("vgpu_alloc_percent", 0),
                 },
                 "gpu_core": {
                     "allocated": node.get("gpu_core_used", 0),
                     "total": node.get("gpu_core_total", 0),
-                    "percent": node.get("gpu_core_percent", 0),
+                    "percent": node.get("gpu_core_alloc_percent", 0),
+                    "usage_percent": None,
                 },
                 "gpu_memory": {
                     "allocated_gib": node.get("gpu_mem_used_gib", 0),
                     "total_gib": node.get("gpu_mem_total_gib", 0),
-                    "percent": node.get("gpu_mem_percent", 0),
+                    "percent": node.get("gpu_mem_alloc_percent", 0),
+                    "usage_percent": None,
                 },
+
                 "data_precision": data_precision,
+                "is_real_physical_card": False,
+                "metric_source": node.get("metric_source") or METRIC_SOURCE,
+                "mapping_rule": mapping_rule,
+                "usage_metric_ready": False,
+                "usage_metric_source": "not_configured",
             })
 
-    # 如果节点接口能通，但节点没有 GPU/vGPU 字段，则降级为集群资源卡，避免前端空白。
     if not card_items:
         summary_result = summary(query)
         if summary_result.get("is_success"):
@@ -906,20 +976,29 @@ def cards(query):
                     "gpu_core": {
                         "allocated": cards_data.get("gpu_core_used", 0),
                         "total": cards_data.get("gpu_core_total", 0),
-                        "percent": cards_data.get("gpu_core_percent", 0),
+                        "percent": cards_data.get("gpu_core_alloc_percent", 0),
+                        "usage_percent": None,
                     },
                     "gpu_memory": {
                         "allocated_gib": cards_data.get("gpu_mem_used_gib", 0),
                         "total_gib": cards_data.get("gpu_mem_total_gib", 0),
-                        "percent": cards_data.get("gpu_mem_percent", 0),
+                        "percent": cards_data.get("gpu_mem_alloc_percent", 0),
+                        "usage_percent": None,
                     },
                     "data_precision": "cluster_resource_snapshot",
+                    "is_real_physical_card": False,
+                    "metric_source": summary_result.get("metric_source") or METRIC_SOURCE,
+                    "mapping_rule": "cluster resource snapshot",
+                    "usage_metric_ready": False,
+                    "usage_metric_source": "not_configured",
                 })
 
     return _ok({
         "items": card_items,
         "total": len(card_items),
-        "note": "当前卡片由节点资源或集群资源推导。接入 DCGM / HAMI / Ascend exporter 后，可精确到真实物理卡 UUID。",
+        "mapping_rule": "1 GPU = 2 vGPU when only vGPU resources are available",
+        "metric_source": METRIC_SOURCE,
+        "note": "Cards are inferred from node or cluster resources. Real device UUID and runtime usage require device metrics integration.",
     })
 
 
@@ -938,17 +1017,34 @@ def trend(query):
             "time": t.strftime("%H:%M"),
             "gpu_alloc_percent": cards_data.get("gpu_alloc_percent", 0),
             "vgpu_alloc_percent": cards_data.get("vgpu_alloc_percent", 0),
-            "gpu_mem_percent": cards_data.get("gpu_mem_percent", 0),
-            "gpu_core_percent": cards_data.get("gpu_core_percent", 0),
+
+            "gpu_mem_percent": cards_data.get("gpu_mem_alloc_percent", 0),
+            "gpu_mem_alloc_percent": cards_data.get("gpu_mem_alloc_percent", 0),
+            "gpu_mem_usage_percent": None,
+
+            "gpu_core_percent": cards_data.get("gpu_core_alloc_percent", 0),
+            "gpu_core_alloc_percent": cards_data.get("gpu_core_alloc_percent", 0),
+            "gpu_core_usage_percent": None,
         })
 
     return _ok({
         "range": query.get("range") or "1h",
         "items": items,
         "data_source": "current_resource_snapshot",
+        "metric_source": METRIC_SOURCE,
+        "usage_metric_ready": False,
         "need_history_collector": True,
-        "note": "当前未接入历史采集表，趋势接口返回当前资源快照序列。后续接 Prometheus 或 MySQL 采集表后可返回真实趋势。",
+        "note": "Current response is generated from the latest resource snapshot. Historical samples require collector integration.",
     })
+
+
+def _node_score(item):
+    return max(
+        item.get("vgpu_alloc_percent", 0),
+        item.get("gpu_alloc_percent", 0),
+        item.get("gpu_mem_alloc_percent", 0),
+        item.get("gpu_core_alloc_percent", 0),
+    )
 
 
 def recommendation(query):
@@ -956,14 +1052,34 @@ def recommendation(query):
     if not summary_result.get("is_success"):
         return summary_result
 
-    cards_data = summary_result.get("cards", {})
+    node_result = nodes(query)
+    node_items = node_result.get("items", []) if node_result.get("is_success") else []
 
+    cards_data = summary_result.get("cards", {})
     max_percent = max(
         cards_data.get("gpu_alloc_percent", 0),
         cards_data.get("vgpu_alloc_percent", 0),
-        cards_data.get("gpu_mem_percent", 0),
-        cards_data.get("gpu_core_percent", 0),
+        cards_data.get("gpu_mem_alloc_percent", 0),
+        cards_data.get("gpu_core_alloc_percent", 0),
     )
+
+    recommended_node = None
+    avoid_nodes = []
+    reason = []
+
+    if node_items:
+        sorted_nodes = sorted(node_items, key=_node_score)
+        recommended_node = sorted_nodes[0].get("node_name")
+        reason.append(f"{recommended_node} 当前资源分配率相对较低")
+
+        avoid_nodes = [
+            item.get("node_name")
+            for item in sorted_nodes
+            if _node_score(item) >= 80
+        ]
+
+        if avoid_nodes:
+            reason.append("部分节点已进入中高负载区间，建议暂缓新增普通任务")
 
     if max_percent >= 90:
         priority = "高"
@@ -981,8 +1097,13 @@ def recommendation(query):
         risk = "低，可继续创建实例"
         suggestion = "当前资源余量较充足，可以继续创建实例或开启弹性任务。"
 
+    if recommended_node:
+        suggestion = f"建议优先调度到 {recommended_node}。" + suggestion
+
     return _ok({
         "recommend_mode": mode,
+        "recommended_node": recommended_node,
+        "avoid_nodes": avoid_nodes,
         "expected_occupation": {
             "gpu_available": cards_data.get("gpu_available", 0),
             "vgpu_available": cards_data.get("vgpu_available", 0),
@@ -994,7 +1115,10 @@ def recommendation(query):
         "strategy": "60% 主任务 + 30% 弹性 + 10% 预留",
         "risk_level": risk,
         "priority": priority,
+        "reason": reason,
         "suggestion": suggestion,
+        "metric_source": METRIC_SOURCE,
+        "usage_metric_ready": False,
     })
 
 
@@ -1004,17 +1128,14 @@ def quotas(query):
         return err
 
     namespace = query.get("namespace") or Config.DCE_NAMESPACE
-    path = f"/api/v1/namespaces/{namespace}/resourcequotas"
-    status, result = client._request("GET", path)
+    status, result = client._request("GET", f"/api/v1/namespaces/{namespace}/resourcequotas")
 
-    # ResourceQuota 不是首页 / 资源中心主流程必需数据。
-    # 当前 serviceaccount 没有 list resourcequotas 权限时，不应该让页面接口失败。
     if status == 403:
         return _ok({
             "namespace": namespace,
             "items": [],
             "total": 0,
-            "warning": "当前账号没有 ResourceQuota 查询权限，已跳过配额展示。",
+            "warning": "Current service account has no permission to list ResourceQuota. Quota display is skipped.",
             "permission_required": {
                 "api_group": "",
                 "resource": "resourcequotas",
@@ -1024,18 +1145,17 @@ def quotas(query):
             "response": result,
         })
 
-    # 有些环境没有配置 ResourceQuota，也按空列表处理。
     if status == 404:
         return _ok({
             "namespace": namespace,
             "items": [],
             "total": 0,
-            "warning": "当前命名空间未配置 ResourceQuota。",
+            "warning": "ResourceQuota is not configured in the namespace.",
             "response": result,
         })
 
     if not 200 <= status < 300:
-        return _error("资源配额查询失败", status, result)
+        return _error("Failed to query ResourceQuota", status, result)
 
     items = []
     for item in result.get("items", []) or []:

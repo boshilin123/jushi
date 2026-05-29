@@ -15,6 +15,10 @@ services:
     container_name: jushi-api
     env_file:
       - .env.example
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
     depends_on:
       jushi-mysql:
         condition: service_healthy
@@ -23,12 +27,15 @@ services:
   jushi-mysql:
     image: mysql:8.0
     container_name: jushi-mysql
+    command: ["--default-time-zone=+08:00"]
     environment:
+      TZ: Asia/Shanghai
       MYSQL_ROOT_PASSWORD: root_pass
       MYSQL_DATABASE: jushi
       MYSQL_USER: jushi
       MYSQL_PASSWORD: jushi_pass
     volumes:
+      - /etc/localtime:/etc/localtime:ro
       - ./mysql/data:/var/lib/mysql
       - ./backend/db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:

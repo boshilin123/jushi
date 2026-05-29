@@ -15,4 +15,5 @@ def normalize_audit_export(payload: dict) -> dict:
         "operator": content.get("operator", ""),
         "operation_type": content.get("operation_type", ""),
         "keyword": content.get("keyword", ""),
+        "format": content.get("format", "json"),
     }

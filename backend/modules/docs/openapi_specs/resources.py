@@ -27,7 +27,7 @@ RESOURCE_PATHS = {
         "get": {
             "tags": ["Resources"],
             "summary": "配额列表",
-            "description": "查询命名空间 ResourceQuota 信息。",
+            "description": "查询命名空间 ResourceQuota 信息；无权限时降级为空列表，不阻塞页面。",
             "responses": {"200": {"description": "配额列表"}},
         }
     },

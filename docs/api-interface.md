@@ -12,7 +12,7 @@
 - 端口管理统一使用 `/api/port-list/*`，不再使用 `/api/ports/allowlist/*`
 - 前端如果通过 Vite 开发服务访问后端，需要设置 `VITE_API_BASE_URL=http://localhost:8080`
 
-当前后端仍有部分接口只返回占位数据。本文档以“一期应交付接口契约”为准，并在每个接口标注当前状态。
+当前后端多数核心接口已接入 MySQL、PaaS 或 Kubernetes。本文档以“一期应交付接口契约”为准，并在每个接口标注当前状态。
 
 ## 2. 通用约定
 
@@ -1223,7 +1223,7 @@ GET /api/port-list/resolve
 GET /api/resources/summary
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已实现。会读取 PaaS 集群资源汇总，并结合 Kubernetes 节点、Pod 资源和本地 `resource_snapshot` 生成资源总览；同类快照默认按 `RESOURCE_SNAPSHOT_MIN_INTERVAL_SECONDS` 做写入节流。
 
 响应：
 
@@ -1247,7 +1247,7 @@ GET /api/resources/summary
 GET /api/resources/nodes
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已实现。优先读取 PaaS 节点接口，并结合 Kubernetes Node 信息补充节点标签、状态和资源字段。
 
 响应：
 
@@ -1272,7 +1272,7 @@ GET /api/resources/nodes
 GET /api/resources/gpus
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已实现。按 NVIDIA GPU、NVIDIA vGPU、显存、算力以及 Huawei Ascend310P 等资源名汇总可用量、已用量和展示字段。
 
 响应：
 
@@ -1303,7 +1303,7 @@ GET /api/resources/gpus
 GET /api/resources/quotas
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已实现。查询 Kubernetes ResourceQuota；如果当前 token 无权限或集群未配置配额，会返回空列表并保留错误快照，不阻塞页面展示。
 
 响应：
 
@@ -1313,6 +1313,30 @@ GET /api/resources/quotas
 }
 ```
 
+### 7.5 显卡 / vGPU 卡片列表
+
+```http
+GET /api/resources/cards
+```
+
+当前状态：后端已实现。用于资源中心卡片或表格展示，数据来自 PaaS/Kubernetes 资源汇总和节点信息。
+
+### 7.6 资源趋势
+
+```http
+GET /api/resources/trend
+```
+
+当前状态：后端已实现。当前从 `resource_snapshot` 历史快照读取趋势；如果历史不足，会基于当前资源快照返回兜底趋势数据。
+
+### 7.7 资源推荐策略
+
+```http
+GET /api/resources/recommendation
+```
+
+当前状态：后端已实现。根据当前 GPU、vGPU、显存、算力和节点压力返回资源使用建议。
+
 ## 8. Pod 运维接口
 
 ### 8.1 Pod 列表
@@ -1321,7 +1345,7 @@ GET /api/resources/quotas
 GET /api/pods/list
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已实现。通过 Kubernetes API 查询 Pod 列表，默认命名空间为 `DCE_NAMESPACE`，支持按部署名、Pod phase 和节点名筛选。
 
 查询参数：
 
@@ -1357,7 +1381,7 @@ GET /api/pods/list
 GET /api/pods/detail
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已实现。通过 Kubernetes API 读取 Pod 对象，并补充容器状态、重启次数和关联 Events。
 
 查询参数：
 
@@ -1383,7 +1407,7 @@ GET /api/pods/detail
 GET /api/pods/logs
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已实现。通过 Kubernetes logs API 读取最近日志行，默认 `tail_lines = 200`。
 
 查询参数：
 
@@ -1409,7 +1433,7 @@ GET /api/pods/logs
 POST /api/pods/delete
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已实现。通过 Kubernetes API 删除指定 Pod；通常用于让控制器自动重建 Pod。
 
 请求：
 
@@ -1434,7 +1458,7 @@ POST /api/pods/delete
 POST /api/pods/restart
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已实现。当前实现复用删除 Pod 语义，删除后由 Deployment/控制器自动拉起新 Pod。
 
 请求：
 
@@ -1709,7 +1733,7 @@ POST /api/alerts/reopen
 GET /api/logs/operations
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已实现。查询 `operation_log` 表，部署类接口会通过 Flask `after_request` 中间件自动写入操作日志。
 
 查询参数：
 
@@ -1744,7 +1768,7 @@ GET /api/logs/operations
 GET /api/logs/instance
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已实现。通过 `app=<deployment_name>` 查找实例 Pod，优先读取 Running Pod 的 Kubernetes logs。
 
 查询参数：
 
@@ -1769,7 +1793,7 @@ GET /api/logs/instance
 GET /api/logs/pod
 ```
 
-当前状态：后端已建路由，占位实现。
+当前状态：后端已实现。复用 Pod 运维模块的 Kubernetes logs 能力。
 
 查询参数同 `/api/pods/logs`。
 
@@ -1789,7 +1813,7 @@ GET /api/logs/pod
 POST /api/audits/list
 ```
 
-当前状态：后端已实现。默认导出 JSON 文件；`content.format = excel` 时导出 Excel xlsx 文件。
+当前状态：后端已实现。查询 `operation_log` 并按审计 envelope 返回，支持 `operator`、`operation_type`、`keyword`、分页等筛选。
 
 请求：
 
@@ -1838,7 +1862,7 @@ POST /api/audits/import
 Content-Type: multipart/form-data
 ```
 
-当前状态：一期需补齐。前端适配层已预留该接口。
+当前状态：一期需补齐。前端适配层已预留该接口；当前后端未注册 `/api/audits/import` 路由。
 
 表单字段：
 
@@ -1861,7 +1885,7 @@ Content-Type: multipart/form-data
 POST /api/audits/export
 ```
 
-当前状态：一期需补齐。前端适配层已预留该接口。
+当前状态：后端已实现。按筛选条件导出 `operation_log`，`content.format = json` 时返回 JSON 文件，`content.format = excel` 时返回 Excel xlsx 文件。
 
 请求：
 
@@ -2024,18 +2048,25 @@ GET  /api/resources/summary
 GET  /api/resources/nodes
 GET  /api/resources/gpus
 GET  /api/resources/quotas
+GET  /api/resources/cards
+GET  /api/resources/trend
+GET  /api/resources/recommendation
 GET  /api/pods/list
 GET  /api/pods/detail
 GET  /api/pods/logs
 POST /api/pods/delete
 POST /api/pods/restart
 POST /api/alerts/list
+POST /api/alerts/history
 POST /api/alerts/create
 POST /api/alerts/resolve
 POST /api/alerts/ignore
+POST /api/alerts/reopen
 GET  /api/logs/operations
 GET  /api/logs/instance
 GET  /api/logs/pod
+POST /api/audits/list
+POST /api/audits/export
 ```
 
 其中已接入真实 MySQL 或 PaaS 能力的接口：
@@ -2059,23 +2090,40 @@ POST /api/deploy/stop
 POST /api/deploy/list
 POST /api/deploy/logs
 POST /api/alerts/list
+POST /api/alerts/history
 POST /api/alerts/create
 POST /api/alerts/resolve
 POST /api/alerts/ignore
+POST /api/alerts/reopen
 GET  /api/port-list/list
 POST /api/port-list/add
 PUT  /api/port-list/update/{item_id}
 DELETE /api/port-list/delete/{item_id}
 GET  /api/port-list/resolve
+GET  /api/resources/summary
+GET  /api/resources/nodes
+GET  /api/resources/gpus
+GET  /api/resources/quotas
+GET  /api/resources/cards
+GET  /api/resources/trend
+GET  /api/resources/recommendation
+GET  /api/pods/list
+GET  /api/pods/detail
+GET  /api/pods/logs
+POST /api/pods/delete
+POST /api/pods/restart
+GET  /api/logs/operations
+GET  /api/logs/instance
+GET  /api/logs/pod
+POST /api/audits/list
+POST /api/audits/export
 ```
 
 后续业务增强或暂缓接口：
 
 ```text
 POST /api/deploy/queue
-POST /api/audits/list
 POST /api/audits/import
-POST /api/audits/export
 ```
 
 前端需要调整：

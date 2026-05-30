@@ -218,27 +218,31 @@ GET /api/port-list/resolve
 
 ### 5. 集群资源类接口
 
-资源中心新增接口：
+资源中心接口当前已接入后端实现：
 
 ```http
 GET /api/resources/summary
 GET /api/resources/nodes
 GET /api/resources/gpus
 GET /api/resources/quotas
+GET /api/resources/cards
+GET /api/resources/trend
+GET /api/resources/recommendation
 ```
 
-数据来源可以二选一：
+当前数据来源为：
 
 ```text
-1. PaaS 平台 API
-2. Kubernetes API / kubectl
+1. PaaS 平台 API 的集群、节点和资源汇总
+2. Kubernetes API 的 Node、Pod、ResourceQuota 信息
+3. 本地 MySQL `resource_snapshot` 历史快照
 ```
 
-现阶段建议优先复用 PaaS API。
+资源快照写入受 `RESOURCE_SNAPSHOT_ENABLED` 和 `RESOURCE_SNAPSHOT_MIN_INTERVAL_SECONDS` 控制，避免前端频繁刷新导致数据库写入过量。趋势接口当前从 `resource_snapshot` 读取，历史不足时使用当前快照兜底。
 
 ### 6. Pod 类接口
 
-Pod 类接口用于前端查看实例运行状态，以及执行基础操作。
+Pod 类接口用于前端查看实例运行状态，以及执行基础操作。当前已通过 Kubernetes API 实现。
 
 ```http
 GET  /api/pods/list
@@ -250,7 +254,7 @@ POST /api/pods/restart
 
 `/api/deploy/retrieve` 面向部署实例，适合实例中心；`/api/pods/*` 面向运维排查，适合 Pod 管理页面。
 
-一期日志先返回最近 N 行，不做实时流式日志。
+Pod 日志当前通过 Kubernetes logs API 返回最近 N 行，不做实时流式日志。删除和重启 Pod 均依赖 Kubernetes API，其中重启 Pod 通过删除 Pod 触发控制器自动重建。
 
 ### 7. 告警类接口
 
@@ -313,7 +317,7 @@ GET /api/logs/instance
 GET /api/logs/pod
 ```
 
-审计接口需要兼容当前前端适配层：
+审计接口兼容当前前端适配层：
 
 ```http
 POST /api/audits/list
@@ -325,7 +329,11 @@ POST /api/audits/export
 
 - `/api/deploy/logs` 保留历史接口名，但当前返回 Pod describe 风格的纯文本排障信息。
 - Pod 通过 `app=<deployment_name>` 查找，优先展示 Running Pod。
-- 暂不做实时 WebSocket 日志，也不保存容器 stdout 到数据库。
+- `/api/logs/operations` 从 `operation_log` 查询部署类操作日志，部署类接口通过后端中间件自动写入。
+- `/api/logs/instance` 和 `/api/logs/pod` 通过 Kubernetes logs API 查询，不保存容器 stdout 到数据库。
+- `/api/audits/list` 和 `/api/audits/export` 已基于 `operation_log` 实现，导出支持 JSON 和 Excel。
+- `/api/audits/import` 当前仍是预留接口，后端尚未注册路由。
+- 暂不做实时 WebSocket 日志。
 
 操作日志表：
 

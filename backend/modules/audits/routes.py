@@ -74,17 +74,11 @@ def _export_excel(records: list):
         cell.alignment = Alignment(horizontal="center", vertical="center")
 
     # 数据行
-    OP_TYPE_MAP = {
-        "check_available": "资源预检", "create": "创建实例", "retrieve": "查询实例",
-        "release": "释放实例", "reset": "重启实例", "list": "查询列表",
-    }
-
     for row_idx, r in enumerate(records, 2):
-        op_type_cn = OP_TYPE_MAP.get(r.get("operation_type", ""), r.get("operation_type", ""))
         is_success = "成功" if r.get("is_success") else "失败"
         values = [
             r.get("id"),
-            op_type_cn,
+            r.get("operation_type"),
             r.get("operator"),
             r.get("operator_ip"),
             r.get("target_type"),

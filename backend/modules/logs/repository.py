@@ -85,7 +85,7 @@ def list_operation_logs(query: dict):
                 page_size = query.get("page_size", 20)
                 offset = (page - 1) * page_size
                 cur.execute(
-                    f"SELECT * FROM operation_log WHERE {where_sql} ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                    f"SELECT * FROM operation_log WHERE {where_sql} ORDER BY created_at ASC, id ASC LIMIT %s OFFSET %s",
                     params + [page_size, offset],
                 )
                 rows = cur.fetchall()
@@ -112,7 +112,7 @@ def export_operation_logs(query: dict):
 
             with conn.cursor() as cur:
                 cur.execute(
-                    f"SELECT * FROM operation_log WHERE {where_sql} ORDER BY created_at DESC",
+                    f"SELECT * FROM operation_log WHERE {where_sql} ORDER BY created_at ASC, id ASC",
                     params,
                 )
                 rows = cur.fetchall()

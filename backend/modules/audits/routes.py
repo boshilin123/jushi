@@ -80,23 +80,10 @@ def _export_excel(records: list):
         cell.font = header_font
         cell.alignment = Alignment(horizontal="center", vertical="center")
 
-    operation_type_map = {
-        "check_available": "资源预检",
-        "create": "创建实例",
-        "retrieve": "查询实例",
-        "release": "释放实例",
-        "reset": "重启实例",
-        "list": "查询列表",
-    }
-
     for row_idx, record in enumerate(records, 2):
-        operation_type = operation_type_map.get(
-            record.get("operation_type", ""),
-            record.get("operation_type", ""),
-        )
         values = [
             record.get("id"),
-            operation_type,
+            record.get("operation_type"),
             record.get("operator"),
             record.get("operator_ip"),
             record.get("target_type"),

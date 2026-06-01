@@ -307,6 +307,78 @@ def _node_resource_usage_from_paas(client: PaasClient, resource_name: str) -> tu
     }, None
 
 
+def _resource_nodes_service():
+    try:
+        from backend.modules.resources.service import nodes as resource_nodes
+    except ModuleNotFoundError:
+        from modules.resources.service import nodes as resource_nodes
+    return resource_nodes
+
+
+def _node_resource_usage_from_resource_nodes(resource_name: str) -> tuple[dict | None, dict | None]:
+    if resource_name not in {"nvidia.com/gpu", "nvidia.com/vgpu"}:
+        return None, {"error": f"资源节点明细暂未支持 {resource_name} 预检"}
+
+    try:
+        result = _resource_nodes_service()({"namespace": Config.DCE_NAMESPACE})
+    except Exception as exc:
+        return None, {"error": str(exc)}
+
+    if not isinstance(result, dict) or not result.get("is_success"):
+        return None, {"response": result}
+
+    items = result.get("items") or []
+    total = 0
+    used = 0
+    max_available = 0
+    total_available = 0
+    node_details = []
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+
+        gpu_mode = str(item.get("gpu_mode") or "").lower()
+        if resource_name == "nvidia.com/gpu" and gpu_mode != "gpu":
+            continue
+
+        if resource_name == "nvidia.com/vgpu":
+            node_total = _parse_int_quantity(item.get("vgpu_total"))
+            node_used = _parse_int_quantity(item.get("vgpu_used"))
+            node_available = _parse_int_quantity(item.get("vgpu_available"))
+        else:
+            node_total = _parse_int_quantity(item.get("physical_gpu_total"))
+            node_used = _parse_int_quantity(item.get("physical_gpu_used"))
+            node_available = _parse_int_quantity(item.get("physical_gpu_available"))
+
+        if node_total <= 0:
+            continue
+
+        total += node_total
+        used += node_used
+        max_available = max(max_available, node_available)
+        total_available += node_available
+        node_details.append({
+            "node_name": item.get("node_name"),
+            "gpu_mode": item.get("gpu_mode"),
+            "total": node_total,
+            "used": node_used,
+            "available": node_available,
+            "source": "resources_nodes",
+        })
+
+    if total <= 0:
+        return None, {"error": f"资源节点明细未暴露 {resource_name} 可调度资源"}
+
+    return {
+        "total": total,
+        "used": used,
+        "available": max_available,
+        "total_available": total_available,
+        "nodes": sorted(node_details, key=lambda item: item.get("node_name") or ""),
+    }, None
+
+
 def _get_client_ip() -> str:
     xff = request.headers.get("X-Forwarded-For", "")
     if xff:
@@ -628,14 +700,17 @@ def check_available(payload: dict, *, validate_envelope: bool = True) -> dict:
     resource_name = device_request["resource_name"]
     gpu_total = _parse_int_quantity(allocatable.get(resource_name))
 
-    # 创建准入优先按节点 raw allocatable + 活跃 Pod requests/limits 计算。
-    # 这样释放 Pod 后不再等待集群级 resourceSummary.allocated 慢刷新。
-    node_gpu_usage, node_gpu_error = _node_resource_usage_from_paas(client, resource_name)
+    # 创建准入优先复用资源中心节点明细，与首页“物理卡 3/4”保持同一统计口径。
+    # 取不到时再回退到节点 raw allocatable + 活跃 Pod requests/limits 计算。
+    node_gpu_usage, node_gpu_error = _node_resource_usage_from_resource_nodes(resource_name)
+    gpu_used_source = "resources_nodes"
+    if not node_gpu_usage:
+        node_gpu_usage, node_gpu_error = _node_resource_usage_from_paas(client, resource_name)
+        gpu_used_source = "node_raw_allocatable_and_active_pods"
     if node_gpu_usage:
         gpu_total = node_gpu_usage["total"]
         gpu_used = node_gpu_usage["used"]
         gpu_available = node_gpu_usage["available"]
-        gpu_used_source = "node_raw_allocatable_and_active_pods"
     elif resource_name in allocated:
         gpu_used = _parse_int_quantity(allocated.get(resource_name))
         gpu_used_source = "resourceSummary.allocated"

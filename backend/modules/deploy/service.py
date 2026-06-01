@@ -202,6 +202,111 @@ def _deployment_exists(deployments: list, name: str) -> bool:
     return False
 
 
+def _resource_value(resources: dict, resource_name: str) -> int:
+    if not isinstance(resources, dict):
+        return 0
+    return _parse_int_quantity(resources.get(resource_name))
+
+
+def _node_name(node: dict) -> str:
+    metadata = node.get("metadata", {}) or {}
+    return str(metadata.get("name") or node.get("name") or "").strip()
+
+
+def _node_raw_allocatable(node: dict) -> dict:
+    status = node.get("status", {}) or {}
+    summary = status.get("resourceSummary", {}) or {}
+    return (
+        summary.get("allocatable")
+        or status.get("allocatable")
+        or status.get("capacity")
+        or {}
+    )
+
+
+def _pod_resource_request(pod: dict, resource_name: str) -> int:
+    total = 0
+    spec = pod.get("spec", {}) or {}
+    for container in spec.get("containers", []) or []:
+        resources = container.get("resources", {}) or {}
+        limits = resources.get("limits", {}) or {}
+        requests = resources.get("requests", {}) or {}
+        total += max(
+            _resource_value(limits, resource_name),
+            _resource_value(requests, resource_name),
+        )
+    return total
+
+
+def _is_active_scheduled_pod(pod: dict) -> bool:
+    metadata = pod.get("metadata", {}) or {}
+    if metadata.get("deletionTimestamp"):
+        return False
+    phase = ((pod.get("status", {}) or {}).get("phase") or "").strip()
+    if phase in {"Succeeded", "Failed"}:
+        return False
+    return bool((pod.get("spec", {}) or {}).get("nodeName"))
+
+
+def _node_resource_usage_from_paas(client: PaasClient, resource_name: str) -> tuple[dict | None, dict | None]:
+    node_path = f"/clusters/{Config.DCE_CLUSTER}/nodes"
+    node_status, node_result = client.request_with_status("GET", node_path)
+    if node_status != 200:
+        return None, {"nodes": node_result, "http_status_code": node_status}
+
+    pod_path = f"/clusters/{Config.DCE_CLUSTER}/namespaces/{Config.DCE_NAMESPACE}/pods"
+    pod_status, pod_result = client.request_with_status("GET", pod_path)
+    if pod_status != 200:
+        return None, {"pods": pod_result, "http_status_code": pod_status}
+
+    nodes = [node for node in _deployment_items(node_result) if isinstance(node, dict)]
+    pods = [pod for pod in pod_items(pod_result) if isinstance(pod, dict) and _is_active_scheduled_pod(pod)]
+
+    by_node = {}
+    for node in nodes:
+        name = _node_name(node)
+        if not name:
+            continue
+        total = _resource_value(_node_raw_allocatable(node), resource_name)
+        by_node[name] = {"total": total, "used": 0, "available": total}
+
+    for pod in pods:
+        node_name = str(((pod.get("spec", {}) or {}).get("nodeName")) or "").strip()
+        if node_name not in by_node:
+            continue
+        requested = _pod_resource_request(pod, resource_name)
+        if requested <= 0:
+            continue
+        by_node[node_name]["used"] += requested
+
+    total = 0
+    used = 0
+    max_available = 0
+    node_details = []
+    for name, item in by_node.items():
+        item["available"] = max(item["total"] - item["used"], 0)
+        total += item["total"]
+        used += item["used"]
+        max_available = max(max_available, item["available"])
+        node_details.append({
+            "node_name": name,
+            "total": item["total"],
+            "used": item["used"],
+            "available": item["available"],
+        })
+
+    if total <= 0:
+        return None, {"error": f"节点未暴露 {resource_name} 可调度资源"}
+
+    return {
+        "total": total,
+        "used": used,
+        "available": max_available,
+        "total_available": sum(item["available"] for item in by_node.values()),
+        "nodes": sorted(node_details, key=lambda item: item["node_name"]),
+    }, None
+
+
 def _get_client_ip() -> str:
     xff = request.headers.get("X-Forwarded-For", "")
     if xff:
@@ -523,15 +628,22 @@ def check_available(payload: dict, *, validate_envelope: bool = True) -> dict:
     resource_name = device_request["resource_name"]
     gpu_total = _parse_int_quantity(allocatable.get(resource_name))
 
-    # 新规则：优先使用 PaaS resourceSummary.allocated 中的 GPU 已分配数量。
-    # 如果 PaaS 没有返回该资源名，再退回旧脚本逻辑：用 Deployment 数量估算已占 GPU。
-    if resource_name in allocated:
+    # 创建准入优先按节点 raw allocatable + 活跃 Pod requests/limits 计算。
+    # 这样释放 Pod 后不再等待集群级 resourceSummary.allocated 慢刷新。
+    node_gpu_usage, node_gpu_error = _node_resource_usage_from_paas(client, resource_name)
+    if node_gpu_usage:
+        gpu_total = node_gpu_usage["total"]
+        gpu_used = node_gpu_usage["used"]
+        gpu_available = node_gpu_usage["available"]
+        gpu_used_source = "node_raw_allocatable_and_active_pods"
+    elif resource_name in allocated:
         gpu_used = _parse_int_quantity(allocated.get(resource_name))
         gpu_used_source = "resourceSummary.allocated"
+        gpu_available = max(gpu_total - gpu_used, 0)
     else:
         gpu_used = len(deployments)
         gpu_used_source = "deployment_count_fallback"
-    gpu_available = max(gpu_total - gpu_used, 0)
+        gpu_available = max(gpu_total - gpu_used, 0)
     requested = device_request["requested"]
 
     checks = []
@@ -546,6 +658,11 @@ def check_available(payload: dict, *, validate_envelope: bool = True) -> dict:
         "used_source": gpu_used_source,
         "vendor": device_request["vendor"],
     }
+    if node_gpu_usage:
+        gpu_detail["total_available"] = node_gpu_usage["total_available"]
+        gpu_detail["nodes"] = node_gpu_usage["nodes"]
+    elif node_gpu_error:
+        gpu_detail["node_usage_error"] = node_gpu_error
     if gpu_available >= requested:
         checks.append(_passed_check("gpu_available", "GPU 可用余量", f"可用 {gpu_available} / {gpu_total} 张", gpu_detail))
     else:

@@ -716,6 +716,29 @@ COMPONENTS = {
             },
             "required": ["msg_id", "serial", "context"],
         },
+        "LogoStatus": {
+            "type": "object",
+            "properties": {
+                "logo_url": {
+                    "type": "string",
+                    "example": "/api/system/logo/file",
+                    "description": "Logo 图片 URL，空字符串表示未启用",
+                },
+                "logo_enabled": {
+                    "type": "boolean",
+                    "example": True,
+                    "description": "自定义 Logo 是否启用",
+                },
+            },
+        },
+        "LogoUploadResult": {
+            "type": "object",
+            "properties": {
+                "is_success": {"type": "boolean", "example": True},
+                "logo_url": {"type": "string", "example": "/api/system/logo/file"},
+                "logo_enabled": {"type": "boolean", "example": True},
+            },
+        },
         "AuditExportEnvelope": {
             "type": "object",
             "properties": {

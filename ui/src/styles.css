@@ -585,6 +585,7 @@ body { font-size: 14px; }
 .sidebar { padding: 24px 18px; }
 .brand { gap: 14px; margin-bottom: 28px; }
 .brand-mark { width: 48px; height: 48px; font-size: 20px; }
+.brand-mark-img { width: 48px; height: 48px; }
 .brand strong { font-size: 21px; }
 .brand span { margin-top: 7px; font-size: 13px; letter-spacing: 5px; }
 .nav { gap: 8px; }
@@ -726,4 +727,115 @@ th, td { padding: 14px 22px; font-size: 13px; }
   .login-preview { left: 24px; right: 24px; width: auto; bottom: 32px; }
   .login-dots { left: 28px; bottom: 28px; }
   .preview-grid { grid-template-columns: 1fr; }
+}
+
+/* ---- 系统 Logo ---- */
+.brand-mark-img {
+  width: 54px;
+  height: 54px;
+  border-radius: 10px;
+  object-fit: cover;
+}
+
+.login-brand-mark-img {
+  width: 78px;
+  height: 78px;
+  border-radius: 14px;
+  object-fit: cover;
+}
+
+/* ---- Logo 上传弹窗 ---- */
+.logo-upload-modal {
+  width: min(520px, 100%);
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+}
+
+.logo-upload-modal header {
+  display: flex;
+  justify-content: space-between;
+  gap: 22px;
+  border-bottom: 1px solid #e2e5eb;
+  padding: 24px;
+}
+
+.logo-upload-modal h2 {
+  margin: 0;
+  font-size: 24px;
+}
+
+.logo-upload-modal header p {
+  margin-top: 8px;
+  color: #788293;
+  line-height: 1.6;
+  max-width: 560px;
+}
+
+.logo-upload-modal .upload-dropzone {
+  position: relative;
+  display: grid;
+  place-items: center;
+  gap: 10px;
+  width: calc(100% - 48px);
+  min-height: 240px;
+  margin: 24px;
+  border: 1px dashed #c9d2df;
+  border-radius: 16px;
+  background: #fbfcfb;
+  color: #536071;
+  text-align: center;
+  padding: 24px;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.logo-upload-modal .upload-dropzone input {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.logo-upload-modal .upload-dropzone.has-file {
+  border-style: solid;
+  border-color: #b8f155;
+  background: #fbfff7;
+  padding: 0;
+  min-height: auto;
+}
+
+.logo-upload-modal .upload-dropzone strong {
+  color: #111;
+  font-size: 16px;
+}
+
+.logo-upload-modal .upload-dropzone span {
+  color: #8a93a3;
+  font-weight: 750;
+}
+
+.logo-preview {
+  display: block;
+  max-width: 100%;
+  max-height: 360px;
+  object-fit: contain;
+}
+
+.logo-upload-modal footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  border-top: 1px solid #e2e5eb;
+  padding: 16px 24px;
+}
+
+.logo-upload-modal .ghost,
+.logo-upload-modal .primary {
+  min-width: 104px;
+  min-height: 44px;
+  border-radius: 10px;
+  font-size: 15px;
 }

@@ -20,6 +20,7 @@ import {
   FileText,
   Gauge,
   Grid2X2,
+  Image,
   List,
   Lock,
   LogOut,
@@ -43,6 +44,7 @@ import {
   YAxis,
 } from "recharts";
 import "./styles.css";
+import { fetchSystemLogo, uploadSystemLogo } from "./api";
 
 type Page = "dashboard" | "resources" | "instances" | "pending" | "ports" | "alerts" | "audit" | "login";
 type Lang = "zh" | "en";
@@ -353,6 +355,14 @@ function App() {
   const [guideOpen, setGuideOpen] = useState(() => window.localStorage.getItem("bluedot-vgpu-guide-read") !== "1");
   const [loggedIn, setLoggedIn] = useState(false);
   const [mockToast, setMockToast] = useState("");
+  const [logoUrl, setLogoUrl] = useState("");
+  const [logoModalOpen, setLogoModalOpen] = useState(false);
+
+  useEffect(() => {
+    fetchSystemLogo().then((data) => {
+      if (data.logo_url) setLogoUrl(data.logo_url);
+    }).catch(() => {});
+  }, []);
 
   const closeGuide = () => {
     window.localStorage.setItem("bluedot-vgpu-guide-read", "1");
@@ -422,6 +432,7 @@ function App() {
       <>
         <style>{styles}</style>
         <LoginPage
+          logoUrl={logoUrl}
           onLogin={() => {
             setLoggedIn(true);
             setPage("dashboard");
@@ -435,7 +446,7 @@ function App() {
     <>
       <style>{styles}</style>
       <div className="app-shell">
-        <Sidebar page={page} setPage={setPage} onGuideOpen={() => setGuideOpen(true)} />
+        <Sidebar page={page} setPage={setPage} onGuideOpen={() => setGuideOpen(true)} logoUrl={logoUrl} />
         <main className="main">
           <Topbar
             title={pageTitle}
@@ -453,6 +464,7 @@ function App() {
             }}
             onAddMockData={addMockData}
             onCreate={() => setCreateOpen(true)}
+            onOpenLogoModal={() => setLogoModalOpen(true)}
           />
           <div className="content">
             {page === "dashboard" && <Dashboard setPage={setPage} onCreate={() => setCreateOpen(true)} />}
@@ -470,11 +482,17 @@ function App() {
       {createOpen && <CreateModal onClose={() => setCreateOpen(false)} />}
       {guideOpen && <VgpuGuideOverlay onClose={closeGuide} />}
       {mockToast && <div className="toast">{mockToast}</div>}
+      {logoModalOpen && (
+        <LogoUploadModal
+          onClose={() => setLogoModalOpen(false)}
+          onUploaded={(url: string) => { setLogoUrl(url); setLogoModalOpen(false); }}
+        />
+      )}
     </>
   );
 }
 
-function Sidebar({ page, setPage, onGuideOpen }: { page: Page; setPage: (page: Page) => void; onGuideOpen: () => void }) {
+function Sidebar({ page, setPage, onGuideOpen, logoUrl }: { page: Page; setPage: (page: Page) => void; onGuideOpen: () => void; logoUrl: string }) {
   const links = [
     { id: "dashboard" as Page, label: "首页", icon: Grid2X2 },
     { id: "resources" as Page, label: "资源中心", icon: Cpu },
@@ -487,7 +505,11 @@ function Sidebar({ page, setPage, onGuideOpen }: { page: Page; setPage: (page: P
   return (
     <aside className="sidebar">
       <div className="brand">
-        <div className="brand-mark">B</div>
+        {logoUrl ? (
+          <img className="brand-mark-img" src={logoUrl} alt="BlueDot" />
+        ) : (
+          <div className="brand-mark">B</div>
+        )}
         <div>
           <strong>BlueDot</strong>
           <span>INTELLIGENCE</span>
@@ -547,6 +569,7 @@ function Topbar({
   onLogout,
   onAddMockData,
   onCreate,
+  onOpenLogoModal,
 }: {
   title: string;
   lang: Lang;
@@ -559,6 +582,7 @@ function Topbar({
   onLogout: () => void;
   onAddMockData: () => void;
   onCreate: () => void;
+  onOpenLogoModal: () => void;
 }) {
   return (
     <header className="topbar">
@@ -589,6 +613,7 @@ function Topbar({
               <small>账号</small>
               <strong>admin</strong>
               <hr />
+              <button onClick={() => { setAccountOpen(false); onOpenLogoModal(); }}><Image size={16} /> 更换Logo</button>
               <button><RotateCw size={16} /> 切换账号</button>
               <button className="danger" onClick={onLogout}><LogOut size={16} /> 退出</button>
             </div>
@@ -599,7 +624,7 @@ function Topbar({
   );
 }
 
-function LoginPage({ onLogin }: { onLogin: () => void }) {
+function LoginPage({ onLogin, logoUrl }: { onLogin: () => void; logoUrl: string }) {
   const [slideIndex, setSlideIndex] = useState(0);
   const [showPassword, setShowPassword] = useState(false);
   const [account, setAccount] = useState("");
@@ -619,7 +644,11 @@ function LoginPage({ onLogin }: { onLogin: () => void }) {
       <section className="login-shell">
         <div className="login-form-panel">
           <div className="login-wordmark">BlueDot</div>
-          <div className="login-brand-mark">B</div>
+          {logoUrl ? (
+            <img className="login-brand-mark-img" src={logoUrl} alt="BlueDot" />
+          ) : (
+            <div className="login-brand-mark">B</div>
+          )}
           <div className="login-copy">
             <h1>登录</h1>
             <p>企业 AI 推理场景的 GPU/NPU 资源监控、虚拟化资源调度、推理实例部署、运行治理与资源复用优化平台</p>
@@ -1811,6 +1840,77 @@ function TopoCard({ label, title, lines, bar, warning }: { label: string; title:
       <strong>{title}</strong>
       {bar && <div className="split-bar"><i>40%</i><i>40%</i><i>预留</i></div>}
       {lines.map((line) => <p key={line}>{line}</p>)}
+    </div>
+  );
+}
+
+function LogoUploadModal({ onClose, onUploaded }: { onClose: () => void; onUploaded: (url: string) => void }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = event.target.files?.[0];
+    if (!selected) return;
+    setFile(selected);
+    setError("");
+
+    const reader = new FileReader();
+    reader.onload = () => setPreview(reader.result as string);
+    reader.readAsDataURL(selected);
+  };
+
+  const handleUpload = async () => {
+    if (!file) {
+      setError("请先选择文件");
+      return;
+    }
+    setUploading(true);
+    setError("");
+    try {
+      const result = await uploadSystemLogo(file);
+      onUploaded(result.logo_url);
+    } catch (err: any) {
+      setError(err.message || "上传失败");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <section className="logo-upload-modal" onClick={(e) => e.stopPropagation()}>
+        <header>
+          <div>
+            <h2>更换 Logo</h2>
+            <p>上传新图片替换侧边栏和登录页的 Logo，支持 PNG / JPG / SVG / GIF，≤ 2 MB</p>
+          </div>
+          <button className="close" onClick={onClose}><X /></button>
+        </header>
+
+        <label className={cx("upload-dropzone", !!file && "has-file")}>
+          <input type="file" accept=".png,.jpg,.jpeg,.svg,.gif" onChange={handleFileChange} disabled={uploading} />
+          {preview ? (
+            <img className="logo-preview" src={preview} alt="预览" />
+          ) : (
+            <>
+              <Image size={32} />
+              <strong>拖拽或点击选择图片</strong>
+              <span>PNG · JPG · SVG · GIF（≤ 2 MB）</span>
+            </>
+          )}
+        </label>
+
+        {error && <p className="form-error" style={{ marginTop: 12 }}>{error}</p>}
+
+        <footer>
+          <button className="ghost" onClick={onClose} disabled={uploading}>取消</button>
+          <button className="primary" onClick={handleUpload} disabled={uploading || !file}>
+            {uploading ? "上传中..." : "确认更换"}
+          </button>
+        </footer>
+      </section>
     </div>
   );
 }

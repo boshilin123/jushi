@@ -262,3 +262,35 @@ export function importAuditLogs(formData: FormData, user = "admin") {
 export function exportAuditLogs(payload: ApiEnvelope<AuditQuery & { format: "excel" | "pdf" }>) {
   return requestApi<{ download_url: string }, ApiEnvelope<AuditQuery & { format: "excel" | "pdf" }>>("/api/audits/export", payload);
 }
+
+// --- 系统 Logo ---
+
+export type LogoResponse = {
+  logo_url: string;
+};
+
+export async function fetchSystemLogo(): Promise<LogoResponse> {
+  const response = await fetch(`${API_BASE}/api/system/logo`);
+  if (!response.ok) {
+    return { logo_url: "" };
+  }
+  const data = await response.json();
+  return { logo_url: data?.logo_url || "" };
+}
+
+export async function uploadSystemLogo(file: File, user = "admin"): Promise<LogoResponse> {
+  const formData = new FormData();
+  formData.append("logo", file);
+
+  const response = await fetch(`${API_BASE}/api/system/logo`, {
+    method: "POST",
+    headers: { "X-User": user },
+    body: formData,
+  });
+
+  const data = await response.json();
+  if (!response.ok || !data.is_success) {
+    throw new Error(data.msg || "Logo 上传失败");
+  }
+  return { logo_url: data.logo_url || "" };
+}

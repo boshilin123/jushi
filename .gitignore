@@ -72,6 +72,8 @@ instance/
 # Project runtime data
 mysql/data/
 *.zip
+backend/static/logos/*
+!backend/static/logos/.gitkeep
 
 # Scrapy stuff:
 .scrapy

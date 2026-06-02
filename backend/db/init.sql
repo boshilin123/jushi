@@ -87,6 +87,12 @@ CREATE TABLE IF NOT EXISTS resource_snapshot (
 ) COMMENT='资源快照表，用于保存集群资源统计结果';
 
 
+CREATE TABLE IF NOT EXISTS sys_config (
+  config_key VARCHAR(64) NOT NULL PRIMARY KEY COMMENT '配置键名',
+  config_value TEXT NOT NULL COMMENT '配置值',
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间'
+) COMMENT='系统配置表，存储全局配置项如 logo 路径等';
+
 INSERT IGNORE INTO sys_user (
   username,
   password,

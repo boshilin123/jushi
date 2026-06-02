@@ -42,8 +42,9 @@ except ModuleNotFoundError:
 
 
 AUTH_EXEMPT_PATHS = {
-    "/api/health",
+    "/api/system/health",
     "/api/auth/login",
+    "/api/system/logo",  # GET 免登录（登录页也需要显示 logo），POST 内部自行校验管理员
 }
 AUTH_EXEMPT_PREFIXES = (
     # 开发阶段放行 Swagger 文档，否则无法先打开页面调登录接口拿 token。
@@ -173,7 +174,11 @@ def _register_log_middleware(app: Flask) -> None:
 
 
 def create_app() -> Flask:
-    app = Flask(__name__)
+    app = Flask(
+        __name__,
+        static_folder=os.path.join(os.path.dirname(__file__), "static"),
+        static_url_path="/static",
+    )
     # 开发联调阶段允许 Swagger UI、Vite 前端等跨域请求后端 API。
     if CORS:
         CORS(app, resources={r"/api/*": {"origins": "*"}})
@@ -189,7 +194,7 @@ def create_app() -> Flask:
     _register_log_middleware(app)
 
     # 按业务域注册接口模块；根路径 "/" 暂不占用，后续留给前端或网关。
-    app.register_blueprint(system_bp)
+    app.register_blueprint(system_bp, url_prefix="/api/system")
     app.register_blueprint(docs_bp, url_prefix="/api/docs")
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(users_bp, url_prefix="/api/users")

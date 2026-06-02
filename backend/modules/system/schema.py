@@ -1,6 +1,7 @@
 import os
 
 LOGO_CONFIG_KEY = "logo_path"
+LOGO_ENABLED_KEY = "logo_enabled"
 LOGO_UPLOAD_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "static", "logos")
 )

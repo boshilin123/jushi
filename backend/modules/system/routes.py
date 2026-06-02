@@ -1,4 +1,3 @@
-import json
 import os
 
 from flask import Blueprint, g, jsonify, request
@@ -17,13 +16,13 @@ def health():
 
 @system_bp.get("/logo")
 def get_logo():
-    """获取当前系统 logo 的 URL（免登录）。"""
+    """获取当前系统 logo 状态（免登录），包含 URL 和启用标记。"""
     return jsonify(service.get_logo())
 
 
 @system_bp.post("/logo")
 def upload_logo():
-    """上传/更换系统 logo（需登录 + 管理员权限）。
+    """上传/更换系统 logo（需登录 + 管理员权限），自动启用。
 
     因为 GET /api/system/logo 需要免登录供登录页使用，
     而该路径被全局认证拦截器放行，因此 POST 在此手动校验身份。
@@ -54,22 +53,39 @@ def upload_logo():
     return service.upload_logo(file)
 
 
+@system_bp.put("/logo/enable")
+def enable_logo():
+    """启用自定义 Logo（需管理员，不删除文件仅切换显示）。
+
+    该路径不匹配认证豁免，由全局拦截器校验登录态。
+    """
+    if g.current_user.get("role") != "admin":
+        return jsonify({"is_success": False, "msg": "仅管理员可操作"}), 403
+    return jsonify(service.set_logo_enabled(True))
+
+
+@system_bp.put("/logo/disable")
+def disable_logo():
+    """恢复默认 Logo（需管理员，关掉自定义开关，文件全部保留）。
+
+    该路径不匹配认证豁免，由全局拦截器校验登录态。
+    """
+    if g.current_user.get("role") != "admin":
+        return jsonify({"is_success": False, "msg": "仅管理员可操作"}), 403
+    return jsonify(service.set_logo_enabled(False))
+
+
 @system_bp.get("/logo/file")
 def serve_logo_file():
     """直接返回 logo 图片文件（免登录），供 <img> 标签使用。
 
-    从数据库读取当前 logo 路径并返回文件。该路径在 nginx 代理 /api/* 下，
-    避免了单独配置静态文件路由。
+    仅在 logo 启用时返回文件，否则 404。
     """
     from flask import send_file
 
-    logo_data = service.get_logo()
-    if not logo_data.get("logo_url"):
-        return jsonify({"is_success": False, "msg": "未设置 Logo"}), 404
-
     file_path = service.get_logo_file_path()
     if not file_path:
-        return jsonify({"is_success": False, "msg": "Logo 文件不存在"}), 404
+        return jsonify({"is_success": False, "msg": "Logo 未启用或文件不存在"}), 404
 
     ext = os.path.splitext(file_path)[1].lower()
     mime_map = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".svg": "image/svg+xml", ".gif": "image/gif"}
@@ -83,7 +99,6 @@ def _resolve_current_user() -> dict | None:
 
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
-        # 兼容 X-User header（开发阶段）
         x_user = (request.headers.get("X-User") or "").strip()
         if x_user:
             return _lookup_user(x_user)

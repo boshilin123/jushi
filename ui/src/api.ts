@@ -267,15 +267,19 @@ export function exportAuditLogs(payload: ApiEnvelope<AuditQuery & { format: "exc
 
 export type LogoResponse = {
   logo_url: string;
+  logo_enabled: boolean;
 };
 
 export async function fetchSystemLogo(): Promise<LogoResponse> {
   const response = await fetch(`${API_BASE}/api/system/logo`);
   if (!response.ok) {
-    return { logo_url: "" };
+    return { logo_url: "", logo_enabled: false };
   }
   const data = await response.json();
-  return { logo_url: data?.logo_url || "" };
+  return {
+    logo_url: data?.logo_url || "",
+    logo_enabled: data?.logo_enabled === true,
+  };
 }
 
 export async function uploadSystemLogo(file: File, user = "admin"): Promise<LogoResponse> {
@@ -292,5 +296,38 @@ export async function uploadSystemLogo(file: File, user = "admin"): Promise<Logo
   if (!response.ok || !data.is_success) {
     throw new Error(data.msg || "Logo 上传失败");
   }
-  return { logo_url: data.logo_url || "" };
+  return {
+    logo_url: data.logo_url || "",
+    logo_enabled: data.logo_enabled === true,
+  };
+}
+
+export async function enableLogo(user = "admin"): Promise<LogoResponse> {
+  const response = await fetch(`${API_BASE}/api/system/logo/enable`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", "X-User": user },
+  });
+  const data = await response.json();
+  if (!response.ok || !data.is_success) {
+    throw new Error(data.msg || "启用 Logo 失败");
+  }
+  return {
+    logo_url: data.logo_url || "",
+    logo_enabled: data.logo_enabled === true,
+  };
+}
+
+export async function disableLogo(user = "admin"): Promise<LogoResponse> {
+  const response = await fetch(`${API_BASE}/api/system/logo/disable`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", "X-User": user },
+  });
+  const data = await response.json();
+  if (!response.ok || !data.is_success) {
+    throw new Error(data.msg || "恢复默认失败");
+  }
+  return {
+    logo_url: data.logo_url || "",
+    logo_enabled: data.logo_enabled === true,
+  };
 }

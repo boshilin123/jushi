@@ -44,7 +44,7 @@ import {
   YAxis,
 } from "recharts";
 import "./styles.css";
-import { fetchSystemLogo, uploadSystemLogo } from "./api";
+import { disableLogo, enableLogo, fetchSystemLogo, uploadSystemLogo } from "./api";
 
 type Page = "dashboard" | "resources" | "instances" | "pending" | "ports" | "alerts" | "audit" | "login";
 type Lang = "zh" | "en";
@@ -356,13 +356,33 @@ function App() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [mockToast, setMockToast] = useState("");
   const [logoUrl, setLogoUrl] = useState("");
+  const [logoEnabled, setLogoEnabled] = useState(false);
   const [logoModalOpen, setLogoModalOpen] = useState(false);
 
   useEffect(() => {
     fetchSystemLogo().then((data) => {
-      if (data.logo_url) setLogoUrl(data.logo_url);
+      if (data.logo_url && data.logo_enabled) {
+        setLogoUrl(data.logo_url);
+        setLogoEnabled(true);
+      }
     }).catch(() => {});
   }, []);
+
+  const handleEnableLogo = async () => {
+    try {
+      const result = await enableLogo();
+      setLogoUrl(result.logo_url);
+      setLogoEnabled(true);
+    } catch { /* backend will show error via toast if needed */ }
+  };
+
+  const handleDisableLogo = async () => {
+    try {
+      await disableLogo();
+      setLogoUrl("");
+      setLogoEnabled(false);
+    } catch { /* backend will show error via toast if needed */ }
+  };
 
   const closeGuide = () => {
     window.localStorage.setItem("bluedot-vgpu-guide-read", "1");
@@ -465,6 +485,9 @@ function App() {
             onAddMockData={addMockData}
             onCreate={() => setCreateOpen(true)}
             onOpenLogoModal={() => setLogoModalOpen(true)}
+            logoEnabled={logoEnabled}
+            onEnableLogo={handleEnableLogo}
+            onDisableLogo={handleDisableLogo}
           />
           <div className="content">
             {page === "dashboard" && <Dashboard setPage={setPage} onCreate={() => setCreateOpen(true)} />}
@@ -485,7 +508,7 @@ function App() {
       {logoModalOpen && (
         <LogoUploadModal
           onClose={() => setLogoModalOpen(false)}
-          onUploaded={(url: string) => { setLogoUrl(url); setLogoModalOpen(false); }}
+          onUploaded={(url: string) => { setLogoUrl(url); setLogoEnabled(true); setLogoModalOpen(false); }}
         />
       )}
     </>
@@ -570,6 +593,9 @@ function Topbar({
   onAddMockData,
   onCreate,
   onOpenLogoModal,
+  logoEnabled,
+  onEnableLogo,
+  onDisableLogo,
 }: {
   title: string;
   lang: Lang;
@@ -583,6 +609,9 @@ function Topbar({
   onAddMockData: () => void;
   onCreate: () => void;
   onOpenLogoModal: () => void;
+  logoEnabled: boolean;
+  onEnableLogo: () => void;
+  onDisableLogo: () => void;
 }) {
   return (
     <header className="topbar">
@@ -614,6 +643,9 @@ function Topbar({
               <strong>admin</strong>
               <hr />
               <button onClick={() => { setAccountOpen(false); onOpenLogoModal(); }}><Image size={16} /> 更换Logo</button>
+              {logoEnabled && (
+                <button onClick={() => { setAccountOpen(false); onDisableLogo(); }}><RotateCw size={16} /> 恢复默认Logo</button>
+              )}
               <button><RotateCw size={16} /> 切换账号</button>
               <button className="danger" onClick={onLogout}><LogOut size={16} /> 退出</button>
             </div>

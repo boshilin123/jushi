@@ -57,9 +57,12 @@ def upload_logo():
 def enable_logo():
     """启用自定义 Logo（需管理员，不删除文件仅切换显示）。
 
-    该路径不匹配认证豁免，由全局拦截器校验登录态。
+    该路径在认证豁免列表中，由路由内部手动校验身份。
     """
-    if g.current_user.get("role") != "admin":
+    user = _resolve_current_user()
+    if not user:
+        return jsonify({"is_success": False, "msg": "未登录"}), 401
+    if user.get("role") != "admin":
         return jsonify({"is_success": False, "msg": "仅管理员可操作"}), 403
     return jsonify(service.set_logo_enabled(True))
 
@@ -68,9 +71,12 @@ def enable_logo():
 def disable_logo():
     """恢复默认 Logo（需管理员，关掉自定义开关，文件全部保留）。
 
-    该路径不匹配认证豁免，由全局拦截器校验登录态。
+    该路径在认证豁免列表中，由路由内部手动校验身份。
     """
-    if g.current_user.get("role") != "admin":
+    user = _resolve_current_user()
+    if not user:
+        return jsonify({"is_success": False, "msg": "未登录"}), 401
+    if user.get("role") != "admin":
         return jsonify({"is_success": False, "msg": "仅管理员可操作"}), 403
     return jsonify(service.set_logo_enabled(False))
 

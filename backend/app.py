@@ -44,8 +44,10 @@ except ModuleNotFoundError:
 AUTH_EXEMPT_PATHS = {
     "/api/system/health",
     "/api/auth/login",
-    "/api/system/logo",       # GET 免登录（返回 logo 状态），POST/PUT 内部自行校验
-    "/api/system/logo/file",  # GET 免登录（返回图片文件）
+    "/api/system/logo",         # GET 免登录，POST/PUT 内部自行校验
+    "/api/system/logo/file",    # GET 免登录（返回图片文件）
+    "/api/system/logo/enable",  # PUT 内部自行校验管理员
+    "/api/system/logo/disable", # PUT 内部自行校验管理员
 }
 AUTH_EXEMPT_PREFIXES = (
     # 开发阶段放行 Swagger 文档，否则无法先打开页面调登录接口拿 token。

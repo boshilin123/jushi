@@ -992,6 +992,7 @@ def _allocated_by_node_from_pods(pods):
 def _aggregate_node_resources(raw_nodes, pod_allocated_by_node):
     allocatable_total = {}
     allocated_total = {}
+    physical_gpu_total = 0
 
     for node in raw_nodes:
         node_name = _node_name(node)
@@ -1006,6 +1007,13 @@ def _aggregate_node_resources(raw_nodes, pod_allocated_by_node):
 
         for key, value in allocated.items():
             _add_resource(allocated_total, key, value)
+
+        # 物理卡数量统一用 _node_gpu_physical_count，与节点行展示口径一致
+        physical_gpu_total += _node_gpu_physical_count(node, allocatable)
+
+    # 用显式累加的物理卡数覆盖 allocatable 中可能不一致的 nvidia.com/gpu
+    if physical_gpu_total > 0:
+        allocatable_total["nvidia.com/gpu"] = physical_gpu_total
 
     return allocatable_total, allocated_total
 

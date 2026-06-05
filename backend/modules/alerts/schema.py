@@ -14,7 +14,7 @@ def normalize_alert_query(payload: dict) -> dict:
         "level": source.get("level", "all"),
         "limit": source.get("limit", 20),
         "page": source.get("page", 1),
-        "page_size": source.get("page_size", 20),
+        "page_size": source.get("page_size") or source.get("limit"),
         "status": source.get("status"),
         "deployment_name": source.get("deployment_name"),
     }

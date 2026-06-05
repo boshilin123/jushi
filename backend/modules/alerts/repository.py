@@ -73,6 +73,34 @@ def _row_to_alert(row: dict) -> dict:
     }
 
 
+def _workload_name(value: str | None) -> str:
+    text = (value or "").strip()
+    if not text:
+        return ""
+    parts = text.rsplit("-", 2)
+    if (
+        len(parts) == 3
+        and len(parts[1]) >= 6
+        and len(parts[2]) >= 4
+        and parts[1].replace("-", "").isalnum()
+        and parts[2].isalnum()
+    ):
+        return parts[0]
+    return text
+
+
+def _alert_group_key(row: dict) -> str:
+    target = row.get("deployment_name") or row.get("instance_name") or row.get("target_name") or ""
+    return "|".join(
+        [
+            row.get("cluster_name") or "",
+            row.get("namespace") or "",
+            row.get("alert_type") or "",
+            _workload_name(target),
+        ]
+    )
+
+
 def upsert_detected_alerts(alerts: list[dict]) -> int:
     if not alerts:
         return 0
@@ -165,23 +193,18 @@ def list_alerts(query: dict):
     page_size = max(min(int(query.get("page_size") or query.get("limit") or 20), 100), 1)
     offset = (page - 1) * page_size
     where_sql = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    handled_conditions = ["status IN ('resolved', 'ignored')"]
+    handled_params = []
+    if query.get("cluster_name"):
+        handled_conditions.append("cluster_name = %s")
+        handled_params.append(query["cluster_name"])
+    if query.get("namespace") and query.get("namespace") != "all":
+        handled_conditions.append("namespace = %s")
+        handled_params.append(query["namespace"])
+    handled_where_sql = f"WHERE {' AND '.join(handled_conditions)}"
 
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                f"""
-                SELECT
-                    COUNT(*) AS open_total,
-                    SUM(alert_level = 'high') AS high_count,
-                    SUM(alert_level = 'medium') AS medium_count,
-                    SUM(alert_level = 'low') AS low_count
-                FROM alert_event
-                WHERE status = 'open'
-                """
-            )
-            summary = cur.fetchone() or {}
-            cur.execute(f"SELECT COUNT(*) AS total FROM alert_event {where_sql}", tuple(params))
-            total = (cur.fetchone() or {}).get("total", 0)
             cur.execute(
                 f"""
                 SELECT *
@@ -196,19 +219,36 @@ def list_alerts(query: dict):
                     END,
                     last_seen_at DESC,
                     created_at DESC
-                LIMIT %s OFFSET %s
                 """,
-                tuple(params + [page_size, offset]),
+                tuple(params),
             )
-            rows = cur.fetchall() or []
+            open_rows = cur.fetchall() or []
+            cur.execute(
+                f"""
+                SELECT *
+                FROM alert_event
+                {handled_where_sql}
+                """,
+                tuple(handled_params),
+            )
+            handled_rows = cur.fetchall() or []
 
-    open_total = int(summary.get("open_total") or 0)
-    high_count = int(summary.get("high_count") or 0)
-    medium_count = int(summary.get("medium_count") or 0)
-    low_count = int(summary.get("low_count") or 0)
+    handled_keys = set()
+    for row in handled_rows:
+        key = _alert_group_key(row)
+        if key:
+            handled_keys.add(key)
+    rows = [row for row in open_rows if _alert_group_key(row) not in handled_keys]
+    total = len(rows)
+    page_rows = rows[offset : offset + page_size]
+
+    open_total = total
+    high_count = sum(1 for row in rows if row.get("alert_level") == "high")
+    medium_count = sum(1 for row in rows if row.get("alert_level") == "medium")
+    low_count = sum(1 for row in rows if row.get("alert_level") == "low")
     health_score = max(0, 100 - high_count * 7 - medium_count * 4 - low_count * 2)
     return {
-        "items": [_row_to_alert(row) for row in rows],
+        "items": [_row_to_alert(row) for row in page_rows],
         "summary": {
             "open_total": open_total,
             "high": high_count,
@@ -315,26 +355,48 @@ def update_alert_status(payload: dict, status: str):
     saved_resolver = resolver if status in {"resolved", "ignored"} else None
     with get_connection() as conn:
         with conn.cursor() as cur:
+            cur.execute("SELECT * FROM alert_event WHERE id = %s", (alert_id,))
+            target_row = cur.fetchone()
+            if not target_row:
+                return {"is_success": False, "msg": "alert not found", "id": str(alert_id)}
+            ids = [alert_id]
+            if status in {"resolved", "ignored"}:
+                target_key = _alert_group_key(target_row)
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM alert_event
+                    WHERE status = 'open'
+                      AND alert_type = %s
+                      AND COALESCE(cluster_name, '') = %s
+                      AND COALESCE(namespace, '') = %s
+                    """,
+                    (
+                        target_row.get("alert_type"),
+                        target_row.get("cluster_name") or "",
+                        target_row.get("namespace") or "",
+                    ),
+                )
+                ids = [
+                    row.get("id")
+                    for row in cur.fetchall() or []
+                    if _alert_group_key(row) == target_key
+                ] or [alert_id]
+            placeholders = ", ".join(["%s"] * len(ids))
             cur.execute(
-                """
+                f"""
                 UPDATE alert_event
                 SET status = %s, resolver = %s, resolved_at = %s, handled_at = %s
-                WHERE id = %s
+                WHERE id IN ({placeholders})
                 """,
-                (status, saved_resolver, resolved_at, handled_at, alert_id),
+                tuple([status, saved_resolver, resolved_at, handled_at] + ids),
             )
             affected_rows = cur.rowcount
-            exists = True
-            if affected_rows <= 0:
-                cur.execute("SELECT id FROM alert_event WHERE id = %s", (alert_id,))
-                exists = cur.fetchone() is not None
 
-    if not exists:
-        return {"is_success": False, "msg": "alert not found", "id": str(alert_id)}
     messages = {
         "ignored": "alert ignored",
         "resolved": "alert resolved",
         "open": "alert reopened",
     }
     msg = messages.get(status, "alert status updated")
-    return {"is_success": True, "id": str(alert_id), "status": status, "msg": msg}
+    return {"is_success": True, "id": str(alert_id), "status": status, "updated": affected_rows, "msg": msg}

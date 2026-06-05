@@ -227,12 +227,13 @@ def _detect_warning_event_alerts(cluster_name: str, events: list[dict]) -> list[
         name = involved.get("name") or (event.get("metadata") or {}).get("name")
         namespace = involved.get("namespace") or (event.get("metadata") or {}).get("namespace") or "cluster"
         reason = event.get("reason") or "Warning"
+        deployment_name = _deployment_from_pod_name(name) if kind == "Pod" else ""
         context = {
             "cluster_name": cluster_name,
             "namespace": namespace,
             "pod_name": name if kind == "Pod" else "",
-            "deployment_name": "",
-            "instance_name": name,
+            "deployment_name": deployment_name,
+            "instance_name": deployment_name or name,
             "node_name": name if kind == "Node" else "",
             "kind": kind,
             "reason": reason,

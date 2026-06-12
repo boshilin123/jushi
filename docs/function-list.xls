@@ -1,0 +1,81 @@
+<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+  <meta name="ProgId" content="Excel.Sheet" />
+  <meta name="Generator" content="Codex" />
+  <!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>功能清单</x:Name><x:WorksheetOptions><x:FreezePanes/><x:FrozenNoSplit/><x:SplitHorizontal>1</x:SplitHorizontal><x:TopRowBottomPane>1</x:TopRowBottomPane></x:WorksheetOptions></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->
+  <style>
+    table { border-collapse: collapse; font-family: "Microsoft YaHei", Arial, sans-serif; font-size: 11pt; }
+    th { background: #d9ead3; font-weight: bold; }
+    th, td { border: 1px solid #999; padding: 6px 8px; mso-number-format: "\@"; vertical-align: top; }
+    .center { text-align: center; }
+  </style>
+</head>
+<body>
+<table>
+  <tr>
+    <th>序号</th>
+    <th>模块</th>
+    <th>功能</th>
+    <th>接口/路径</th>
+    <th>状态</th>
+    <th>数据来源/表</th>
+    <th>说明</th>
+  </tr>
+  <tr><td class="center">1</td><td>系统基础</td><td>健康检查</td><td>GET /api/health</td><td>已实现</td><td>-</td><td>确认后端服务是否可用，免登录。</td></tr>
+  <tr><td class="center">2</td><td>系统基础</td><td>Swagger UI</td><td>GET /api/docs</td><td>已实现</td><td>OpenAPI 模块</td><td>接口调试页面，开发阶段免登录。</td></tr>
+  <tr><td class="center">3</td><td>系统基础</td><td>OpenAPI JSON</td><td>GET /api/docs/openapi.json</td><td>已实现</td><td>openapi_specs</td><td>按业务模块拼装接口规格。</td></tr>
+  <tr><td class="center">4</td><td>系统基础</td><td>统一鉴权拦截</td><td>/api/*</td><td>已实现</td><td>sys_user / Token</td><td>除登录、健康检查、文档外均需 Bearer Token。</td></tr>
+  <tr><td class="center">5</td><td>系统基础</td><td>跨域支持</td><td>Flask CORS</td><td>已实现</td><td>-</td><td>支持前端和 Swagger 跨域调用。</td></tr>
+  <tr><td class="center">6</td><td>认证</td><td>用户登录</td><td>POST /api/auth/login</td><td>已实现</td><td>sys_user</td><td>校验账号密码并返回 Token。</td></tr>
+  <tr><td class="center">7</td><td>认证</td><td>用户登出</td><td>POST /api/auth/logout</td><td>已实现</td><td>-</td><td>无状态 Token 语义下返回成功。</td></tr>
+  <tr><td class="center">8</td><td>认证</td><td>当前用户</td><td>GET /api/auth/me</td><td>已实现</td><td>sys_user</td><td>根据 Token 返回当前用户。</td></tr>
+  <tr><td class="center">9</td><td>用户管理</td><td>用户列表</td><td>GET /api/users/list</td><td>已实现</td><td>sys_user</td><td>支持关键字、角色、状态筛选。</td></tr>
+  <tr><td class="center">10</td><td>用户管理</td><td>创建用户</td><td>POST /api/users/create</td><td>已实现</td><td>sys_user</td><td>创建后台用户。</td></tr>
+  <tr><td class="center">11</td><td>用户管理</td><td>更新用户</td><td>POST /api/users/update</td><td>已实现</td><td>sys_user</td><td>更新姓名、角色、状态。</td></tr>
+  <tr><td class="center">12</td><td>用户管理</td><td>删除用户</td><td>POST /api/users/delete</td><td>已实现</td><td>sys_user</td><td>当前为物理删除。</td></tr>
+  <tr><td class="center">13</td><td>用户管理</td><td>重置密码</td><td>POST /api/users/reset-password</td><td>已实现</td><td>sys_user</td><td>管理员重置密码。</td></tr>
+  <tr><td class="center">14</td><td>集群</td><td>集群查询</td><td>POST /api/cluster</td><td>已实现</td><td>PaaS/DCE API</td><td>查询集群信息，使用 DCE/PaaS Token。</td></tr>
+  <tr><td class="center">15</td><td>部署生命周期</td><td>资源预检</td><td>POST /api/deploy/check-available</td><td>已实现</td><td>K8s/PaaS/GPU/端口规则</td><td>创建前检查 GPU/NPU、CPU、内存、端口等。</td></tr>
+  <tr><td class="center">16</td><td>部署生命周期</td><td>创建推理部署</td><td>POST /api/deploy/create-default</td><td>已实现</td><td>deploy_instance</td><td>创建 Deployment/Service 并保存本地记录。</td></tr>
+  <tr><td class="center">17</td><td>部署生命周期</td><td>查询单个部署</td><td>POST /api/deploy/retrieve</td><td>已实现</td><td>deploy_instance + K8s/PaaS</td><td>合并本地记录和运行状态。</td></tr>
+  <tr><td class="center">18</td><td>部署生命周期</td><td>部署列表</td><td>POST /api/deploy/list</td><td>已实现</td><td>deploy_instance</td><td>返回实例名、部署名、状态、创建时间。</td></tr>
+  <tr><td class="center">19</td><td>部署生命周期</td><td>释放部署</td><td>POST /api/deploy/release</td><td>已实现</td><td>deploy_instance + K8s/PaaS</td><td>释放资源，本地状态置为 released。</td></tr>
+  <tr><td class="center">20</td><td>部署生命周期</td><td>重启部署</td><td>POST /api/deploy/reset</td><td>已实现</td><td>K8s/PaaS</td><td>重启工作负载。</td></tr>
+  <tr><td class="center">21</td><td>部署生命周期</td><td>停止部署</td><td>POST /api/deploy/stop</td><td>已实现</td><td>K8s/PaaS + deploy_instance</td><td>停止实例并更新状态。</td></tr>
+  <tr><td class="center">22</td><td>部署生命周期</td><td>部署日志/描述</td><td>POST /api/deploy/logs</td><td>已实现</td><td>K8s describe/logs</td><td>返回 text/plain 排查信息。</td></tr>
+  <tr><td class="center">23</td><td>部署生命周期</td><td>资源不足排队</td><td>POST /api/deploy/queue</td><td>一期暂缓</td><td>-</td><td>文档保留，一期不建设复杂排队治理。</td></tr>
+  <tr><td class="center">24</td><td>端口规则</td><td>查询封闭端口</td><td>GET /api/port-list/list</td><td>已实现</td><td>port_block_rule</td><td>列出不可分配端口。</td></tr>
+  <tr><td class="center">25</td><td>端口规则</td><td>新增封闭端口</td><td>POST /api/port-list/add</td><td>已实现</td><td>port_block_rule</td><td>唯一索引防重复。</td></tr>
+  <tr><td class="center">26</td><td>端口规则</td><td>更新封闭端口</td><td>PUT /api/port-list/update/{item_id}</td><td>已实现</td><td>port_block_rule</td><td>修改端口或备注。</td></tr>
+  <tr><td class="center">27</td><td>端口规则</td><td>删除封闭端口</td><td>DELETE /api/port-list/delete/{item_id}</td><td>已实现</td><td>port_block_rule</td><td>删除后端口可重新参与分配。</td></tr>
+  <tr><td class="center">28</td><td>端口规则</td><td>端口避让快照</td><td>GET /api/port-list/resolve</td><td>已实现</td><td>port_block_rule</td><td>创建实例前获取避让端口集合。</td></tr>
+  <tr><td class="center">29</td><td>资源中心</td><td>资源总览</td><td>GET /api/resources/summary</td><td>已实现</td><td>K8s/PaaS/resource_snapshot</td><td>首页和资源中心总览。</td></tr>
+  <tr><td class="center">30</td><td>资源中心</td><td>节点列表</td><td>GET /api/resources/nodes</td><td>已实现</td><td>K8s Nodes</td><td>节点资源状态。</td></tr>
+  <tr><td class="center">31</td><td>资源中心</td><td>GPU 统计</td><td>GET /api/resources/gpus</td><td>已实现</td><td>K8s/GPU profile</td><td>GPU/NPU 资源统计。</td></tr>
+  <tr><td class="center">32</td><td>资源中心</td><td>资源配额</td><td>GET /api/resources/quotas</td><td>已实现</td><td>K8s Quota</td><td>命名空间配额。</td></tr>
+  <tr><td class="center">33</td><td>资源中心</td><td>资源卡片</td><td>GET /api/resources/cards</td><td>已实现</td><td>K8s/PaaS</td><td>显卡/虚拟卡片信息。</td></tr>
+  <tr><td class="center">34</td><td>资源中心</td><td>资源趋势</td><td>GET /api/resources/trend</td><td>已实现</td><td>resource_snapshot</td><td>按快照生成趋势。</td></tr>
+  <tr><td class="center">35</td><td>资源中心</td><td>推荐策略</td><td>GET /api/resources/recommendation</td><td>已实现</td><td>资源统计</td><td>返回资源推荐或调度建议。</td></tr>
+  <tr><td class="center">36</td><td>Pod 运维</td><td>Pod 列表</td><td>GET /api/pods/list</td><td>已实现</td><td>K8s Pods</td><td>按命名空间/部署筛选。</td></tr>
+  <tr><td class="center">37</td><td>Pod 运维</td><td>Pod 详情</td><td>GET /api/pods/detail</td><td>已实现</td><td>K8s Pods</td><td>查询 Pod 状态详情。</td></tr>
+  <tr><td class="center">38</td><td>Pod 运维</td><td>Pod 日志</td><td>GET /api/pods/logs</td><td>已实现</td><td>K8s Logs</td><td>获取 Pod 日志。</td></tr>
+  <tr><td class="center">39</td><td>Pod 运维</td><td>删除 Pod</td><td>POST /api/pods/delete</td><td>已实现</td><td>K8s Pods</td><td>删除指定 Pod。</td></tr>
+  <tr><td class="center">40</td><td>Pod 运维</td><td>重启 Pod</td><td>POST /api/pods/restart</td><td>已实现</td><td>K8s Pods</td><td>通过删除/重建触发重启。</td></tr>
+  <tr><td class="center">41</td><td>告警中心</td><td>告警列表</td><td>POST /api/alerts/list</td><td>已实现</td><td>alert_event + K8s Pods/Events/Nodes</td><td>扫描集群并返回 open 告警。</td></tr>
+  <tr><td class="center">42</td><td>告警中心</td><td>告警历史记录</td><td>POST /api/alerts/history</td><td>已实现</td><td>alert_event</td><td>只查 resolved/ignored，不触发扫描。</td></tr>
+  <tr><td class="center">43</td><td>告警中心</td><td>创建告警</td><td>POST /api/alerts/create</td><td>已实现</td><td>alert_event</td><td>手工或后端流程写入告警。</td></tr>
+  <tr><td class="center">44</td><td>告警中心</td><td>解决告警</td><td>POST /api/alerts/resolve</td><td>已实现</td><td>alert_event</td><td>置为 resolved，写 resolver/resolved_at/handled_at。</td></tr>
+  <tr><td class="center">45</td><td>告警中心</td><td>忽略告警</td><td>POST /api/alerts/ignore</td><td>已实现</td><td>alert_event</td><td>置为 ignored，后续扫描不重开。</td></tr>
+  <tr><td class="center">46</td><td>告警中心</td><td>恢复告警</td><td>POST /api/alerts/reopen</td><td>已实现</td><td>alert_event</td><td>历史记录下恢复为 open。</td></tr>
+  <tr><td class="center">47</td><td>日志审计</td><td>操作日志</td><td>GET /api/logs/operations</td><td>已实现</td><td>operation_log</td><td>查询平台操作日志。</td></tr>
+  <tr><td class="center">48</td><td>日志审计</td><td>实例日志</td><td>GET /api/logs/instance</td><td>已实现</td><td>日志文件/后端记录</td><td>查询实例日志。</td></tr>
+  <tr><td class="center">49</td><td>日志审计</td><td>Pod 日志</td><td>GET /api/logs/pod</td><td>已实现</td><td>K8s Logs</td><td>查询 Pod 日志。</td></tr>
+  <tr><td class="center">50</td><td>日志审计</td><td>审计列表</td><td>POST /api/audits/list</td><td>已实现</td><td>operation_log</td><td>支持筛选和分页。</td></tr>
+  <tr><td class="center">51</td><td>日志审计</td><td>审计导出</td><td>POST /api/audits/export</td><td>已实现</td><td>operation_log</td><td>导出审计日志。</td></tr>
+  <tr><td class="center">52</td><td>日志审计</td><td>审计导入</td><td>POST /api/audits/import</td><td>待补齐</td><td>-</td><td>文档保留，当前后端路由未发现。</td></tr>
+  <tr><td class="center">53</td><td>部署运维</td><td>容器时区配置</td><td>docker-compose.yml</td><td>已实现</td><td>Compose</td><td>API/MySQL 设置 Asia/Shanghai 和 MySQL +08:00。</td></tr>
+  <tr><td class="center">54</td><td>部署运维</td><td>三容器部署</td><td>docker compose</td><td>已实现</td><td>jushi-frontend/jushi-api/jushi-mysql</td><td>前端、后端、MySQL 独立容器。</td></tr>
+</table>
+</body>
+</html>

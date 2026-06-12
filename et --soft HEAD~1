@@ -1,0 +1,29 @@
+[33mcommit 89eba90fc53e87a163d6fe7c4e857624b2ce92c2[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m)[m
+Author: boshilin <784010563bo@gmail.com>
+Date:   Mon Jun 1 14:46:42 2026 +0800
+
+    refactor：资源预检改成node维度
+
+[33mcommit 5bc34860ea1ef7cb4bc7873626fea2b14caf7f69[m[33m ([m[1;32mfrom-5bc3486[m[33m)[m
+Author: boshilin <784010563bo@gmail.com>
+Date:   Sat May 30 21:32:04 2026 +0800
+
+    docs：更新资源、Pod、日志、审计接口状态
+
+[33mcommit f28fb851b30889b1faeb84146469d08eaa442aed[m
+Author: boshilin <784010563bo@gmail.com>
+Date:   Fri May 29 20:43:14 2026 +0800
+
+    feat：前后端分离部署
+
+[33mcommit a7273558a0c800422cbf30e0e6d6c23d182fd111[m
+Author: boshilin <784010563bo@gmail.com>
+Date:   Fri May 29 20:21:06 2026 +0800
+
+    docs：功能清单
+
+[33mcommit 0bfbd77de5bbec842ebd1cead5aa9249078b6262[m
+Author: boshilin <784010563bo@gmail.com>
+Date:   Fri May 29 17:53:16 2026 +0800
+
+    fix:修改时区为北京

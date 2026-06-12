@@ -227,5 +227,3 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-.env.example
-docker-compose.yml

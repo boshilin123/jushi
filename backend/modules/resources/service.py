@@ -3,6 +3,19 @@ import os
 import time
 from datetime import datetime, timedelta
 
+"""
+资源中心接口说明。
+
+这个模块不是直接维护一套自己的资源数据，而是把现有 PaaS / Kubernetes
+已经暴露出来的资源信息重新整理成产品页面需要的结构。新人阅读时可以先记住：
+
+1. PaaS 的 cluster resourceSummary 是第一数据源，用于拿集群级 allocatable / allocated。
+2. PaaS / K8s 的 node 列表用于补节点维度、GPU label、vGPU 模式和显卡型号。
+3. K8s Pod requests/limits 用于兜底反推“已分配资源”，避免 PaaS allocated 缺失或不准。
+4. 当前返回的是“资源分配率/容量估算”，不是 DCGM、HAMI、npu-smi 这类真实运行利用率。
+5. 趋势接口依赖 summary 写入 MySQL resource_snapshot 的历史快照，历史不足时用当前值兜底。
+"""
+
 try:
     from backend.config import Config
     from backend.services.paas_client import PaasClient
@@ -90,6 +103,7 @@ def _error(msg, status_code=500, response=None):
 
 
 def _paas_client():
+    # PaaS/DCE 是资源中心最主要的数据入口；没有平台地址或 token 时资源接口不能工作。
     if not Config.DCE_API_BASE:
         return None, _error("DCE_API_BASE is not configured", 500)
     if not Config.DCE_TOKEN:
@@ -98,6 +112,7 @@ def _paas_client():
 
 
 def _k8s_client():
+    # Kubernetes 原生 API 用作补充入口，主要查 nodes、pods、resourcequotas 等 PaaS 包装不稳定的对象。
     client = K8sClient.from_config(Config)
     if not client.api_base:
         return None, _error("K8S_API_BASE is not configured", 500)
@@ -666,6 +681,7 @@ def _get_resource_summary_from_cluster(cluster):
 
 
 def _get_cluster_resource_summary():
+    # 读取 PaaS 集群资源汇总，相当于“全局资源池”的粗粒度总账。
     client, err = _paas_client()
     if err:
         return None, err
@@ -705,6 +721,7 @@ def _list_nodes_from_k8s():
 
 
 def _list_nodes(client):
+    # 节点列表优先走 PaaS；如果 PaaS 节点接口没有返回可用 items，再降级走 Kubernetes 原生节点接口。
     paas_nodes, paas_error = _list_nodes_from_paas(client)
     if paas_nodes:
         return paas_nodes, None
@@ -906,6 +923,8 @@ def _enhance_node_allocatable(node, allocatable=None):
       nvidia.com/gpu.count=4
 
     这里需要把 qhvgpu2 的底层 4 张物理卡也纳入 physical_gpu_total。
+    这一步是资源中心展示“显卡张数”的关键：PaaS/K8s 可能只暴露 vGPU，
+    但产品页面仍然希望看到底层物理卡容量。
     """
     base = dict(allocatable or _node_base_allocatable(node))
 
@@ -971,6 +990,8 @@ def _pod_resources(pod):
 
 
 def _allocated_by_node_from_pods(pods):
+    # 通过全命名空间 Pod 的 requests/limits 反推每个节点的已分配资源。
+    # 这是 PaaS allocated 不完整时的兜底口径，也是资源预检和资源中心一致性的基础。
     by_node = {}
 
     for pod in pods:
@@ -990,6 +1011,8 @@ def _allocated_by_node_from_pods(pods):
 
 
 def _aggregate_node_resources(raw_nodes, pod_allocated_by_node):
+    # 汇总所有节点的 allocatable / allocated。
+    # allocatable 侧会结合节点 label 增强 GPU/vGPU 信息；allocated 侧会合并 PaaS 和 Pod 反推结果。
     allocatable_total = {}
     allocated_total = {}
     physical_gpu_total = 0
@@ -1089,6 +1112,9 @@ def _node_status(node):
 
 
 def _resource_context(query):
+    # resources 模块的核心上下文构建函数。
+    # 对外的 summary / nodes / gpus / cards / recommendation 基本都先走这里，
+    # 再把同一份底层资源快照转换成不同页面需要的视图。
     snapshot, err = _get_cluster_resource_summary()
     if err:
         return None, err
@@ -1136,6 +1162,8 @@ def _resource_context(query):
 
 
 def _resource_summary_cards(allocatable, allocated):
+    # 把底层资源 map 转成前端卡片所需字段。
+    # 注意：显存/算力如果没有平台原生资源键，会按环境变量估算容量和已分配量。
     physical_gpu_total = _sum_resources(allocatable, PHYSICAL_GPU_KEYS)
     physical_gpu_used = _sum_resources(allocated, PHYSICAL_GPU_KEYS)
 
@@ -1254,6 +1282,8 @@ def _resource_summary_cards(allocatable, allocated):
     }
 
 def summary(query):
+    # 资源总览：首页和资源中心顶部统计使用。
+    # 这里会顺手写入 resource_snapshot，供 /trend 后续读取历史趋势。
     context, err = _resource_context(query)
     if err:
         return err
@@ -1294,6 +1324,8 @@ def summary(query):
 
 
 def nodes(query):
+    # 节点资源列表：按节点展示 GPU/vGPU/显存/算力/CPU/内存等分配情况。
+    # 支持 node_name 查询参数做单节点过滤。
     context, err = _resource_context(query)
     if err:
         return err
@@ -1423,6 +1455,8 @@ def nodes(query):
 
 
 def gpus(query):
+    # GPU 统计视图：按资源名和显卡型号聚合，供“显卡类别占比”和 Top 节点展示使用。
+    # 这里会再次调用 nodes(query) 生成 top_nodes，因此资源页并发请求时会产生重复底层查询。
     context, err = _resource_context(query)
     if err:
         return err
@@ -1498,6 +1532,8 @@ def gpus(query):
 
 
 def cards(query):
+    # 显卡卡片视图：根据节点资源推导“每张卡”的展示行。
+    # 当前没有真实 GPU UUID，因此 card_id 是 node_name + 序号；真实卡级指标需要后续接 exporter。
     node_result = nodes(query)
     if not node_result.get("is_success"):
         return node_result
@@ -1630,6 +1666,8 @@ def cards(query):
     })
 
 def trend(query):
+    # 趋势视图：优先从 MySQL resource_snapshot 读历史；样本不足时用当前 summary 生成兜底曲线。
+    # 因此这里的趋势适合 MVP 展示，不等价于 Prometheus 这类真实时序监控。
     range_value = query.get("range") or "1h"
     start_time = _trend_start_time(range_value)
 
@@ -1697,6 +1735,8 @@ def _node_score(item):
 
 
 def recommendation(query):
+    # 推荐策略：根据整体资源分配率和节点排序，给出推荐节点、避让节点和风险提示。
+    # 这里只是轻量启发式规则，不会真正影响 Kubernetes 调度。
     summary_result = summary(query)
     if not summary_result.get("is_success"):
         return summary_result
@@ -1772,6 +1812,7 @@ def recommendation(query):
 
 
 def quotas(query):
+    # 命名空间 ResourceQuota 查询。无权限或没有配置 quota 时降级返回空列表，不阻塞资源中心页面。
     client, err = _k8s_client()
     if err:
         return err

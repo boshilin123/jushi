@@ -721,18 +721,18 @@ def _list_nodes_from_k8s():
 
 
 def _list_nodes(client):
-    # 节点列表优先走 PaaS；如果 PaaS 节点接口没有返回可用 items，再降级走 Kubernetes 原生节点接口。
-    paas_nodes, paas_error = _list_nodes_from_paas(client)
-    if paas_nodes:
-        return paas_nodes, None
-
+    # 节点容量以 Kubernetes 原生 Node 为准；PaaS 节点明细在部分环境中可能滞后或裁剪 GPU 字段。
     k8s_nodes, k8s_error = _list_nodes_from_k8s()
     if k8s_nodes is not None:
         return k8s_nodes, None
 
+    paas_nodes, paas_error = _list_nodes_from_paas(client)
+    if paas_nodes:
+        return paas_nodes, None
+
     return [], {
-        "paas_error": paas_error,
         "k8s_error": k8s_error,
+        "paas_error": paas_error,
     }
 
 
@@ -866,12 +866,9 @@ def _node_gpu_physical_count(node, allocatable=None):
     allocatable = allocatable or _node_base_allocatable(node)
 
     label_count = _node_gpu_label_count(node)
-    if label_count > 0:
-        return label_count
-
     gpu_count = _resource_get(allocatable, "nvidia.com/gpu")
-    if gpu_count > 0:
-        return gpu_count
+    if label_count > 0 or gpu_count > 0:
+        return max(label_count, gpu_count)
 
     vgpu_count = _resource_get(allocatable, "nvidia.com/vgpu")
     if vgpu_count > 0:
@@ -900,9 +897,9 @@ def _node_vgpu_per_gpu(node, physical_count, vgpu_total):
 
 def _node_base_allocatable(node):
     return (
-        _safe_get(node, "status", "resourceSummary", "allocatable")
-        or _safe_get(node, "status", "allocatable")
+        _safe_get(node, "status", "allocatable")
         or _safe_get(node, "status", "capacity")
+        or _safe_get(node, "status", "resourceSummary", "allocatable")
         or {}
     )
 

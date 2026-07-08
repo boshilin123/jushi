@@ -18,3 +18,7 @@ class Config:
 
     K8S_API_BASE = os.getenv("K8S_API_BASE", "")
     K8S_TOKEN = (os.getenv("K8S_TOKEN") or "").strip('"')
+
+    PROMETHEUS_BASE_URL = os.getenv("PROMETHEUS_BASE_URL", "")
+    PROMETHEUS_TOKEN = (os.getenv("PROMETHEUS_TOKEN") or "").strip('"')
+    PROMETHEUS_TIMEOUT_SECONDS = int(os.getenv("PROMETHEUS_TIMEOUT_SECONDS", "5"))

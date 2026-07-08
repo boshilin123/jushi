@@ -21,6 +21,7 @@ try:
     from backend.modules.pods import pods_bp
     from backend.modules.ports import ports_bp
     from backend.modules.resources import resources_bp
+    from backend.modules.resources.service import start_resource_snapshot_collector
     from backend.modules.system import system_bp
     from backend.modules.users import users_bp
 except ModuleNotFoundError:
@@ -37,6 +38,7 @@ except ModuleNotFoundError:
     from modules.pods import pods_bp
     from modules.ports import ports_bp
     from modules.resources import resources_bp
+    from modules.resources.service import start_resource_snapshot_collector
     from modules.system import system_bp
     from modules.users import users_bp
 
@@ -213,6 +215,8 @@ def create_app() -> Flask:
     docs_port = _resolve_docs_port()
     print(f"[Jushi] Swagger UI: http://127.0.0.1:{docs_port}/api/docs")
     print(f"[Jushi] OpenAPI JSON: http://127.0.0.1:{docs_port}/api/docs/openapi.json")
+    if start_resource_snapshot_collector():
+        print("[Jushi] Resource snapshot collector: started")
 
     return app
 
@@ -221,4 +225,5 @@ app = create_app()
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080, debug=True)
+    debug_enabled = os.getenv("FLASK_DEBUG", "").lower() in {"1", "true", "yes", "on"}
+    app.run(host="0.0.0.0", port=8080, debug=debug_enabled, use_reloader=False)

@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 import time
 from datetime import datetime, timedelta
 
@@ -75,6 +76,10 @@ GPU_CORE_KEYS = ["nvidia.com/gpucores"]
 
 UNKNOWN_GPU_MODEL = "Unknown"
 METRIC_SOURCE = "paas_cluster_resourceSummary + k8s_node_label + cluster_pod_resource_fallback"
+PROMETHEUS_METRIC_SOURCE = "prometheus_gpu_memory_usage"
+
+_snapshot_collector_lock = threading.Lock()
+_snapshot_collector_started = False
 
 
 def _now():
@@ -127,9 +132,9 @@ def _snapshot_enabled():
 
 def _snapshot_interval_seconds():
     try:
-        return max(int(os.getenv("RESOURCE_SNAPSHOT_MIN_INTERVAL_SECONDS", "60")), 10)
+        return max(int(os.getenv("RESOURCE_SNAPSHOT_MIN_INTERVAL_SECONDS", "10")), 10)
     except ValueError:
-        return 60
+        return 10
 
 
 def _env_bool(name, default=False):
@@ -156,9 +161,21 @@ def _env_float(name, default):
 def _snapshot_retention_days():
     """
     资源快照保留天数。
-    默认保留 30 天；设置为 0 或负数表示不清理。
+    默认保留 7 天；设置为 0 或负数表示不清理。
     """
-    return _env_int("RESOURCE_SNAPSHOT_RETENTION_DAYS", 30)
+    return _env_int("RESOURCE_SNAPSHOT_RETENTION_DAYS", 7)
+
+
+def _auto_snapshot_enabled():
+    return _env_bool("RESOURCE_AUTO_SNAPSHOT_ENABLED", True)
+
+
+def _auto_snapshot_interval_seconds():
+    return max(_env_int("RESOURCE_AUTO_SNAPSHOT_INTERVAL_SECONDS", _snapshot_interval_seconds()), 10)
+
+
+def _prometheus_gpu_usage_enabled():
+    return _env_bool("PROMETHEUS_GPU_USAGE_ENABLED", True)
 
 
 def _capacity_estimation_enabled():
@@ -241,6 +258,129 @@ def _split_value(value, count):
     return _round2((value or 0) / count)
 
 
+def _prometheus_headers():
+    headers = {}
+    token = getattr(Config, "PROMETHEUS_TOKEN", "")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def _prometheus_query(promql):
+    if not _prometheus_gpu_usage_enabled():
+        return None, "disabled"
+
+    base_url = (getattr(Config, "PROMETHEUS_BASE_URL", "") or "").rstrip("/")
+    if not base_url:
+        return None, "PROMETHEUS_BASE_URL is not configured"
+
+    try:
+        import requests
+
+        response = requests.get(
+            f"{base_url}/api/v1/query",
+            params={"query": promql},
+            headers=_prometheus_headers(),
+            timeout=getattr(Config, "PROMETHEUS_TIMEOUT_SECONDS", 5),
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        return None, str(exc)
+
+    if payload.get("status") != "success":
+        return None, payload.get("error") or "Prometheus query failed"
+
+    return _safe_get(payload, "data", "result", default=[]) or [], None
+
+
+def _prometheus_vector_by_node(promql):
+    rows, error = _prometheus_query(promql)
+    if error:
+        return {}, error
+
+    values = {}
+    for row in rows:
+        metric = row.get("metric") or {}
+        node = str(metric.get("node") or metric.get("Hostname") or "").strip()
+        value = row.get("value") or []
+        if not node or len(value) < 2:
+            continue
+        try:
+            values[node] = values.get(node, 0.0) + float(value[1])
+        except (TypeError, ValueError):
+            continue
+    return values, None
+
+
+def _prometheus_gpu_memory_by_node():
+    if not _prometheus_gpu_usage_enabled():
+        return {}, None
+
+    queries = {
+        "nvidia_used_mib": 'sum by (node) (DCGM_FI_DEV_FB_USED{job="nvidia-dcgm-exporter"})',
+        "nvidia_total_mib": 'sum by (node) (DCGM_FI_DEV_FB_TOTAL{job="nvidia-dcgm-exporter"})',
+        "ascend_used_mib": 'sum by (node) (npu_chip_info_used_memory{job="npu-exporter"})',
+        "ascend_total_mib": 'sum by (node) (npu_chip_info_total_memory{job="npu-exporter"})',
+    }
+
+    query_results = {}
+    errors = []
+    for key, promql in queries.items():
+        values, error = _prometheus_vector_by_node(promql)
+        query_results[key] = values
+        if error:
+            errors.append(f"{key}: {error}")
+
+    nodes = set()
+    for values in query_results.values():
+        nodes.update(values.keys())
+
+    result = {}
+    for node in nodes:
+        used_mib = (
+            query_results["nvidia_used_mib"].get(node, 0.0)
+            + query_results["ascend_used_mib"].get(node, 0.0)
+        )
+        total_mib = (
+            query_results["nvidia_total_mib"].get(node, 0.0)
+            + query_results["ascend_total_mib"].get(node, 0.0)
+        )
+        if total_mib <= 0:
+            continue
+        result[node] = {
+            "gpu_mem_used_gib": _mib_to_gib(used_mib),
+            "gpu_mem_total_gib": _mib_to_gib(total_mib),
+        }
+
+    return result, "; ".join(errors) if errors else None
+
+
+def _apply_prometheus_memory_to_cards(cards, memory_usage):
+    if not memory_usage:
+        return cards
+
+    used_gib = float(memory_usage.get("gpu_mem_used_gib") or 0)
+    prometheus_total_gib = float(memory_usage.get("gpu_mem_total_gib") or 0)
+    total_gib = round(prometheus_total_gib, 2)
+    if total_gib <= 0:
+        return cards
+
+    used_gib = round(min(max(used_gib, 0), total_gib), 2)
+    percent = _percent(used_gib, total_gib)
+    cards.update({
+        "gpu_mem_total_gib": total_gib,
+        "gpu_mem_used_gib": used_gib,
+        "gpu_mem_alloc_percent": percent,
+        "gpu_mem_percent": percent,
+        "gpu_mem_usage_percent": percent,
+        "gpu_mem_capacity_estimated": False,
+        "usage_metric_ready": True,
+        "usage_metric_source": PROMETHEUS_METRIC_SOURCE,
+    })
+    return cards
+
+
 def _cleanup_old_resource_snapshots(cursor):
     days = _snapshot_retention_days()
     if days <= 0:
@@ -295,8 +435,8 @@ def _save_resource_snapshot(snapshot_type, payload):
 
     注意：
     1. 这个动作不能影响主接口返回，所以所有异常都吞掉。
-    2. 默认同一种 snapshot_type 每 60 秒最多写一次，避免前端刷新导致数据库爆量。
-    3. 每次成功写入后，顺带清理过期快照，默认保留 30 天。
+    2. 默认同一种 snapshot_type 每 10 秒最多写一次，避免前端刷新导致数据库爆量。
+    3. 每次成功写入后，顺带清理过期快照，默认保留 7 天。
     """
     if not _snapshot_enabled():
         return False
@@ -368,6 +508,35 @@ def _load_resource_snapshots(snapshot_type, start_time, limit=500):
         })
 
     return result
+
+
+def _snapshot_collector_loop():
+    while True:
+        try:
+            summary({})
+        except Exception:
+            pass
+        time.sleep(_auto_snapshot_interval_seconds())
+
+
+def start_resource_snapshot_collector():
+    global _snapshot_collector_started
+
+    if not _snapshot_enabled() or not _auto_snapshot_enabled():
+        return False
+
+    with _snapshot_collector_lock:
+        if _snapshot_collector_started:
+            return False
+
+        thread = threading.Thread(
+            target=_snapshot_collector_loop,
+            name="jushi-resource-snapshot-collector",
+            daemon=True,
+        )
+        thread.start()
+        _snapshot_collector_started = True
+        return True
 
 
 def _trend_start_time(range_value):
@@ -1158,6 +1327,112 @@ def _resource_context(query):
     }, None
 
 
+def _node_card_rows(context):
+    """Build node-level resource cards with the same logic used by /resources/nodes."""
+    rows = []
+    memory_by_node, memory_error = _prometheus_gpu_memory_by_node()
+    context["prometheus_gpu_memory_error"] = memory_error
+    context["prometheus_gpu_memory_ready"] = bool(memory_by_node)
+    for node in context["raw_nodes"]:
+        node_name = _node_name(node)
+        allocatable = _node_allocatable(node)
+        allocated = _merge_resource_totals(
+            _node_allocated_from_paas(node),
+            context["pod_allocated_by_node"].get(node_name, {}),
+        )
+        cards = _resource_summary_cards(allocatable, allocated)
+        cards = _apply_prometheus_memory_to_cards(cards, memory_by_node.get(node_name))
+        rows.append({
+            "node": node,
+            "node_name": node_name,
+            "allocatable": allocatable,
+            "allocated": allocated,
+            "cards": cards,
+        })
+    return rows
+
+
+def _apply_node_level_card_totals(cards, node_rows):
+    """
+    Align summary cards with the node detail list.
+
+    PaaS cluster resourceSummary can expose GPU count and GPU memory with different
+    scopes. The top cards should use the same node-level aggregation as the
+    "节点显存采集明细" panel so users see one consistent resource view.
+    """
+    if not node_rows:
+        return cards
+
+    node_cards = [row["cards"] for row in node_rows]
+
+    physical_gpu_total = sum(card.get("physical_gpu_total", 0) for card in node_cards)
+    physical_gpu_used = sum(card.get("physical_gpu_used", 0) for card in node_cards)
+    vgpu_total = sum(card.get("vgpu_total", 0) for card in node_cards)
+    vgpu_used = sum(card.get("vgpu_used", 0) for card in node_cards)
+
+    gpu_mem_total_gib = round(sum(card.get("gpu_mem_total_gib", 0) for card in node_cards), 2)
+    gpu_mem_used_gib = round(sum(card.get("gpu_mem_used_gib", 0) for card in node_cards), 2)
+    gpu_core_total = sum(card.get("gpu_core_total", 0) for card in node_cards)
+    gpu_core_used = sum(card.get("gpu_core_used", 0) for card in node_cards)
+    usage_metric_ready = any(card.get("usage_metric_ready") for card in node_cards)
+    usage_metric_source = (
+        PROMETHEUS_METRIC_SOURCE
+        if usage_metric_ready
+        else cards.get("usage_metric_source", "not_configured")
+    )
+
+    cards.update({
+        "gpu_total": physical_gpu_total,
+        "gpu_used": physical_gpu_used,
+        "gpu_available": max(physical_gpu_total - physical_gpu_used, 0),
+        "gpu_alloc_percent": _percent(physical_gpu_used, physical_gpu_total),
+
+        "physical_gpu_total": physical_gpu_total,
+        "physical_gpu_used": physical_gpu_used,
+        "physical_gpu_available": max(physical_gpu_total - physical_gpu_used, 0),
+        "physical_gpu_alloc_percent": _percent(physical_gpu_used, physical_gpu_total),
+
+        "vgpu_total": vgpu_total,
+        "vgpu_used": vgpu_used,
+        "vgpu_available": max(vgpu_total - vgpu_used, 0),
+        "vgpu_alloc_percent": _percent(vgpu_used, vgpu_total),
+
+        "accelerator_unit_total": physical_gpu_total + vgpu_total,
+        "accelerator_unit_used": physical_gpu_used + vgpu_used,
+
+        "gpu_mem_total_gib": gpu_mem_total_gib,
+        "gpu_mem_used_gib": gpu_mem_used_gib,
+        "gpu_mem_alloc_percent": _percent(gpu_mem_used_gib, gpu_mem_total_gib),
+        "gpu_mem_percent": _percent(gpu_mem_used_gib, gpu_mem_total_gib),
+        "gpu_mem_usage_percent": (
+            _percent(gpu_mem_used_gib, gpu_mem_total_gib)
+            if usage_metric_ready
+            else cards.get("gpu_mem_usage_percent")
+        ),
+
+        "gpu_core_total": gpu_core_total,
+        "gpu_core_used": gpu_core_used,
+        "gpu_core_alloc_percent": _percent(gpu_core_used, gpu_core_total),
+        "gpu_core_percent": _percent(gpu_core_used, gpu_core_total),
+
+        "capacity_estimated": cards.get("capacity_estimated") or any(
+            card.get("capacity_estimated") for card in node_cards
+        ),
+        "gpu_mem_capacity_estimated": any(
+            card.get("gpu_mem_capacity_estimated") for card in node_cards
+        ),
+        "gpu_core_capacity_estimated": any(
+            card.get("gpu_core_capacity_estimated") for card in node_cards
+        ),
+        "usage_metric_ready": usage_metric_ready,
+        "usage_metric_source": usage_metric_source,
+        "allocation_metric_source": "node_level_resource_cards",
+        "summary_metric_source": "node_level_resource_cards",
+    })
+
+    return cards
+
+
 def _resource_summary_cards(allocatable, allocated):
     # 把底层资源 map 转成前端卡片所需字段。
     # 注意：显存/算力如果没有平台原生资源键，会按环境变量估算容量和已分配量。
@@ -1285,7 +1560,9 @@ def summary(query):
     if err:
         return err
 
+    node_rows = _node_card_rows(context)
     cards = _resource_summary_cards(context["allocatable"], context["allocated"])
+    cards = _apply_node_level_card_totals(cards, node_rows)
     cards["node_count"] = len(context["raw_nodes"])
 
     max_percent = max(
@@ -1295,6 +1572,13 @@ def summary(query):
         cards.get("gpu_mem_alloc_percent", 0),
     )
     level = _health_level(max_percent)
+    diagnostics = dict(context["diagnostics"])
+    diagnostics.update({
+        "usage_metric_ready": cards.get("usage_metric_ready", False),
+        "usage_metric_source": cards.get("usage_metric_source", "not_configured"),
+        "prometheus_gpu_memory_ready": context.get("prometheus_gpu_memory_ready", False),
+        "prometheus_gpu_memory_error": context.get("prometheus_gpu_memory_error"),
+    })
 
     result = _ok({
         "cluster": Config.DCE_CLUSTER,
@@ -1312,7 +1596,7 @@ def summary(query):
             "allocatable": sorted(list((context["allocatable"] or {}).keys())),
             "allocated": sorted(list((context["allocated"] or {}).keys())),
         },
-        "diagnostics": context["diagnostics"],
+        "diagnostics": diagnostics,
     })
 
     _save_resource_snapshot("summary", result)
@@ -1329,15 +1613,12 @@ def nodes(query):
 
     items = []
 
-    for node in context["raw_nodes"]:
-        node_name = _node_name(node)
-        allocatable = _node_allocatable(node)
-        allocated = _merge_resource_totals(
-            _node_allocated_from_paas(node),
-            context["pod_allocated_by_node"].get(node_name, {}),
-        )
-
-        cards = _resource_summary_cards(allocatable, allocated)
+    for row in _node_card_rows(context):
+        node = row["node"]
+        node_name = row["node_name"]
+        allocatable = row["allocatable"]
+        allocated = row["allocated"]
+        cards = row["cards"]
 
         max_percent = max(
             cards.get("gpu_alloc_percent", 0),
@@ -1396,7 +1677,7 @@ def nodes(query):
             "gpu_mem_used_gib": cards["gpu_mem_used_gib"],
             "gpu_mem_percent": cards["gpu_mem_alloc_percent"],
             "gpu_mem_alloc_percent": cards["gpu_mem_alloc_percent"],
-            "gpu_mem_usage_percent": None,
+            "gpu_mem_usage_percent": cards.get("gpu_mem_usage_percent"),
             "gpu_mem_capacity_estimated": cards["gpu_mem_capacity_estimated"],
 
             "cpu_total_m": cards["cpu_total_m"],
@@ -1404,8 +1685,8 @@ def nodes(query):
             "memory_total_gib": cards["memory_total_gib"],
             "memory_used_gib": cards["memory_used_gib"],
 
-            "usage_metric_ready": False,
-            "usage_metric_source": "not_configured",
+            "usage_metric_ready": cards.get("usage_metric_ready", False),
+            "usage_metric_source": cards.get("usage_metric_source", "not_configured"),
 
             "capacity_estimated": cards["capacity_estimated"],
             "capacity_estimation_source": cards["capacity_estimation_source"],
@@ -1441,13 +1722,19 @@ def nodes(query):
         reverse=True,
     )
 
+    diagnostics = dict(context["diagnostics"])
+    diagnostics.update({
+        "prometheus_gpu_memory_ready": context.get("prometheus_gpu_memory_ready", False),
+        "prometheus_gpu_memory_error": context.get("prometheus_gpu_memory_error"),
+    })
+
     return _ok({
         "namespace": context["namespace"],
         "collected_at": context["collected_at"],
         "metric_source": context["metric_source"],
         "items": items,
         "total": len(items),
-        "diagnostics": context["diagnostics"],
+        "diagnostics": diagnostics,
     })
 
 
@@ -1701,13 +1988,13 @@ def trend(query):
 
             "gpu_mem_percent": cards_data.get("gpu_mem_alloc_percent", 0),
             "gpu_mem_alloc_percent": cards_data.get("gpu_mem_alloc_percent", 0),
-            "gpu_mem_usage_percent": None,
+            "gpu_mem_usage_percent": cards_data.get("gpu_mem_usage_percent"),
 
             "gpu_core_percent": cards_data.get("gpu_core_alloc_percent", 0),
             "gpu_core_alloc_percent": cards_data.get("gpu_core_alloc_percent", 0),
             "gpu_core_usage_percent": None,
 
-            "usage_metric_ready": False,
+            "usage_metric_ready": cards_data.get("usage_metric_ready", False),
         })
 
     return _ok({
@@ -1715,7 +2002,7 @@ def trend(query):
         "items": items,
         "data_source": "current_resource_snapshot",
         "metric_source": METRIC_SOURCE,
-        "usage_metric_ready": False,
+        "usage_metric_ready": cards_data.get("usage_metric_ready", False),
         "need_history_collector": True,
         "snapshot_count": len(snapshot_items),
         "note": "Historical samples are not enough. Current response is generated from the latest resource snapshot.",

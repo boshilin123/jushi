@@ -40,6 +40,7 @@ MIN_MEM_BYTES = 4 * 1024 ** 3
 NODEPORT_START = 30000
 NODEPORT_END = 59999
 NODEPORT_MAX_ATTEMPTS = int(os.getenv("NODEPORT_MAX_ATTEMPTS", "300"))
+DEPLOYMENT_LIST_PAGE_SIZE = int(os.getenv("DEPLOYMENT_LIST_PAGE_SIZE", "200"))
 
 NVIDIA_IMAGE = os.getenv(
     "NVIDIA_IMAGE",
@@ -55,7 +56,7 @@ WORKSHOP_CLIENT_IPS = {
     for item in os.getenv("WORKSHOP_CLIENT_IPS", "10.9.100.195").split(",")
     if item.strip()
 }
-WORKSHOP_PORT_8018 = int(os.getenv("WORKSHOP_PORT_8018", "10001"))
+WORKSHOP_PORT_8018 = int(os.getenv("WORKSHOP_PORT_8018", " 10001"))
 WORKSHOP_PORT_8019 = int(os.getenv("WORKSHOP_PORT_8019", "10002"))
 
 SHARED_DATA_ENABLED = os.getenv("SHARED_DATA_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
@@ -1729,6 +1730,64 @@ def _deployment_display_status(deployment: dict, record: dict | None = None, pod
     return "异常"
 
 
+def _deployment_list_total(result: dict) -> int:
+    if not isinstance(result, dict):
+        return 0
+    candidates = [
+        result.get("total"),
+        result.get("totalCount"),
+        result.get("count"),
+        (result.get("metadata") or {}).get("total"),
+        (result.get("pagination") or {}).get("total"),
+    ]
+    for value in candidates:
+        try:
+            total = int(value)
+            if total > 0:
+                return total
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
+def _deployment_list_path(page: int | None = None, page_size: int | None = None) -> str:
+    path = f"/clusters/{Config.DCE_CLUSTER}/namespaces/{Config.DCE_NAMESPACE}/deployments"
+    if page is None or page_size is None:
+        return path
+    return f"{path}?page={page}&pageSize={page_size}"
+
+
+def _list_namespace_deployments(client: PaasClient) -> tuple[int, dict]:
+    page_size = max(DEPLOYMENT_LIST_PAGE_SIZE, 10)
+    status, result = client.request_with_status("GET", _deployment_list_path(1, page_size))
+    if not 200 <= status < 300:
+        return client.request_with_status("GET", _deployment_list_path())
+
+    items = _deployment_items(result)
+    total = _deployment_list_total(result)
+    if not total or len(items) >= total:
+        merged = dict(result) if isinstance(result, dict) else {}
+        merged["items"] = items
+        return status, merged
+
+    all_items = list(items)
+    page = 2
+    while len(all_items) < total and page <= 50:
+        page_status, page_result = client.request_with_status("GET", _deployment_list_path(page, page_size))
+        if not 200 <= page_status < 300:
+            break
+        page_items = _deployment_items(page_result)
+        if not page_items:
+            break
+        all_items.extend(page_items)
+        page += 1
+
+    merged = dict(result) if isinstance(result, dict) else {}
+    merged["items"] = all_items
+    merged["total"] = total
+    return status, merged
+
+
 def list_deployments(payload: dict) -> dict:
     valid, message = validate_deploy_envelope(payload, "list")
     if not valid:
@@ -1743,8 +1802,7 @@ def list_deployments(payload: dict) -> dict:
 
     try:
         client = PaasClient(Config.DCE_API_BASE, Config.DCE_TOKEN)
-        deployment_path = f"/clusters/{Config.DCE_CLUSTER}/namespaces/{Config.DCE_NAMESPACE}/deployments"
-        deploy_status, deploy_result = client.request_with_status("GET", deployment_path)
+        deploy_status, deploy_result = _list_namespace_deployments(client)
         if not 200 <= deploy_status < 300:
             msg = "部署列表查询超时" if deploy_status == 504 else "部署列表查询失败"
             return _response_envelope(

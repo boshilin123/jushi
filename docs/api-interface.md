@@ -1324,10 +1324,14 @@ GET /api/resources/cards
 ### 7.6 资源趋势
 
 ```http
-GET /api/resources/trend
+GET /api/resources/trend?range=24h
 ```
 
-当前状态：后端已实现。当前从 `resource_snapshot` 历史快照读取趋势；如果历史不足，会基于当前资源快照返回兜底趋势数据。
+当前状态：后端已实现。趋势查询覆盖完整时间窗，并在 MySQL 中按范围分桶：`1h` 每 1 分钟一桶（60 点）、`24h` 每 15 分钟一桶（96 点）、`7d` 每 1 小时一桶（168 点）。分配类指标取桶内最后值，使用率返回桶内平均值和最大值；空桶保留真实时间戳并返回 `null`，前端将其显示为断线。响应中的 `raw_snapshot_count` 表示窗口内原始快照数，`populated_bucket_count` 和 `data_gap_count` 可用于检查数据完整性。历史完全为空时仅用当前值填充最后一桶，不再生成伪造的水平历史曲线。
+
+性能策略：`1h` 保持实时查询；`24h` 和 `7d` 使用后端进程内缓存，分别每 15 分钟、1 小时在后台重新查询并整份覆盖旧缓存，不追加历史版本。刷新期间继续返回上一份成功缓存（stale-while-revalidate），刷新失败也保留旧缓存。进程刚启动且缓存尚未生成时，接口快速返回 `cache_ready=false`、`cache_status=warming`、空 `items` 和 `retry_after_seconds`，前端应在后台重试，不能同步触发长查询阻塞页面。
+
+缓存相关响应字段：`cache_hit`、`cache_ready`、`cache_status`、`cache_generated_at`、`cache_age_seconds`、`cache_refresh_seconds`、`cache_refreshing`、`cache_last_error`。该缓存是单进程内存缓存，容器重启后会重新预热；当前部署为单个 `python app.py` 进程，适用于现有运行方式。
 
 ### 7.7 资源推荐策略
 

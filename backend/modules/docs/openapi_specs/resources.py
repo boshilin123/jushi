@@ -43,7 +43,20 @@ RESOURCE_PATHS = {
         "get": {
             "tags": ["Resources"],
             "summary": "资源趋势",
-            "description": "查询资源使用趋势。当前基于实时快照，后续可接 Prometheus 或采集表。",
+            "description": "查询完整时间范围的资源趋势。1h 实时查询；24h 和 7d 使用后端内存缓存，分别每 15 分钟和 1 小时整份覆盖刷新。缓存未就绪时返回 cache_status=warming，客户端可按 retry_after_seconds 重试。",
+            "parameters": [
+                {
+                    "name": "range",
+                    "in": "query",
+                    "required": False,
+                    "description": "趋势范围：1h 每分钟一桶（60 点）；24h 每 15 分钟一桶（96 点）；7d 每小时一桶（168 点）。",
+                    "schema": {
+                        "type": "string",
+                        "enum": ["1h", "24h", "7d"],
+                        "default": "1h",
+                    },
+                }
+            ],
             "responses": {"200": {"description": "资源趋势"}},
         }
     },

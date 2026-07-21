@@ -21,7 +21,10 @@ try:
     from backend.modules.pods import pods_bp
     from backend.modules.ports import ports_bp
     from backend.modules.resources import resources_bp
-    from backend.modules.resources.service import start_resource_snapshot_collector
+    from backend.modules.resources.service import (
+        start_resource_snapshot_collector,
+        start_resource_trend_cache_refresher,
+    )
     from backend.modules.system import system_bp
     from backend.modules.users import users_bp
 except ModuleNotFoundError:
@@ -38,7 +41,10 @@ except ModuleNotFoundError:
     from modules.pods import pods_bp
     from modules.ports import ports_bp
     from modules.resources import resources_bp
-    from modules.resources.service import start_resource_snapshot_collector
+    from modules.resources.service import (
+        start_resource_snapshot_collector,
+        start_resource_trend_cache_refresher,
+    )
     from modules.system import system_bp
     from modules.users import users_bp
 
@@ -217,6 +223,8 @@ def create_app() -> Flask:
     print(f"[Jushi] OpenAPI JSON: http://127.0.0.1:{docs_port}/api/docs/openapi.json")
     if start_resource_snapshot_collector():
         print("[Jushi] Resource snapshot collector: started")
+    if start_resource_trend_cache_refresher():
+        print("[Jushi] Resource trend cache refresher: started")
 
     return app
 

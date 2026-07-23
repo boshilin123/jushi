@@ -6,6 +6,7 @@ live in focused modules so callers do not need to change during the refactor.
 """
 
 from .collector import quotas
+from .accelerator_collector import start_accelerator_metric_collector
 from .node_gpu import (
     node_gpu_details as _node_gpu_details,
     node_gpu_trend as _node_gpu_trend,
@@ -73,7 +74,7 @@ def node_gpu_trend(node_name, query):
         return error
     return _node_gpu_trend(
         node_name,
-        str((query or {}).get("metric") or "gpu_utilization"),
+        str((query or {}).get("metric") or "memory_utilization"),
         str((query or {}).get("range") or "1h"),
         node,
     )
@@ -86,6 +87,7 @@ def start_resource_trend_cache_refresher():
 __all__ = [
     "start_resource_snapshot_collector",
     "start_resource_trend_cache_refresher",
+    "start_accelerator_metric_collector",
     "summary",
     "nodes",
     "node_gpus",

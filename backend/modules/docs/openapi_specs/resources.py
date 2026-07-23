@@ -38,7 +38,7 @@ RESOURCE_PATHS = {
         "get": {
             "tags": ["Resources"],
             "summary": "节点物理加速卡趋势",
-            "description": "按真实物理卡返回计算利用率或显存利用率历史序列。时间范围缺少历史时保留真实时间边界，不补点、不伪造数据。",
+            "description": "按真实物理卡返回显存利用率历史序列。数据由 jushi-api 每分钟从 Prometheus 采集并保存到 MySQL，1h、24h、7d 分别按 1 分钟、15 分钟、1 小时分桶；空桶返回 null，不补 0。",
             "parameters": [
                 {
                     "name": "node_name",
@@ -52,8 +52,8 @@ RESOURCE_PATHS = {
                     "required": False,
                     "schema": {
                         "type": "string",
-                        "enum": ["gpu_utilization", "memory_utilization"],
-                        "default": "gpu_utilization",
+                        "enum": ["memory_utilization"],
+                        "default": "memory_utilization",
                     },
                 },
                 {

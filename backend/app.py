@@ -22,6 +22,7 @@ try:
     from backend.modules.ports import ports_bp
     from backend.modules.resources import resources_bp
     from backend.modules.resources.service import (
+        start_accelerator_metric_collector,
         start_resource_snapshot_collector,
         start_resource_trend_cache_refresher,
     )
@@ -42,6 +43,7 @@ except ModuleNotFoundError:
     from modules.ports import ports_bp
     from modules.resources import resources_bp
     from modules.resources.service import (
+        start_accelerator_metric_collector,
         start_resource_snapshot_collector,
         start_resource_trend_cache_refresher,
     )
@@ -225,6 +227,8 @@ def create_app() -> Flask:
         print("[Jushi] Resource snapshot collector: started")
     if start_resource_trend_cache_refresher():
         print("[Jushi] Resource trend cache refresher: started")
+    if start_accelerator_metric_collector():
+        print("[Jushi] Accelerator history collector: started")
 
     return app
 

@@ -71,6 +71,26 @@ def _prometheus_gpu_usage_enabled():
     return _env_bool("PROMETHEUS_GPU_USAGE_ENABLED", True)
 
 
+def _accelerator_history_enabled():
+    return _env_bool("ACCELERATOR_HISTORY_ENABLED", True)
+
+
+def _accelerator_history_interval_seconds():
+    return max(_env_int("ACCELERATOR_HISTORY_INTERVAL_SECONDS", 60), 30)
+
+
+def _accelerator_history_retention_days():
+    return max(_env_int("ACCELERATOR_HISTORY_RETENTION_DAYS", 14), 1)
+
+
+def _accelerator_history_backfill_seconds():
+    return max(_env_int("ACCELERATOR_HISTORY_BACKFILL_SECONDS", 90 * 60), 0)
+
+
+def _accelerator_history_cluster_name():
+    return (os.getenv("ACCELERATOR_HISTORY_CLUSTER_NAME") or "default").strip() or "default"
+
+
 def _capacity_estimation_enabled():
     """
     当集群没有暴露 nvidia.com/gpumem / nvidia.com/gpucores 时，

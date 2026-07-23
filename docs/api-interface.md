@@ -1352,10 +1352,14 @@ GET /api/resources/nodes/{node_name}/gpus
 ### 7.9 节点物理加速卡趋势
 
 ```http
-GET /api/resources/nodes/{node_name}/gpu-trend?metric=gpu_utilization&range=1h
+GET /api/resources/nodes/{node_name}/gpu-trend?metric=memory_utilization&range=1h
 ```
 
-`metric` 支持 `gpu_utilization`（计算核心忙碌率）和 `memory_utilization`（显存已用量/总量），`range` 支持 `1h`、`24h`、`7d`。响应按稳定物理卡标识返回 series，并携带完整查询起止时间。历史不足时不插值、不复制数据，前端应显示真实空白区间。
+当前客户页面只支持 `memory_utilization`（显存已用量/总量），`range` 支持 `1h`、`24h`、`7d`。现有 `jushi-api` 后台线程每 60 秒从 Prometheus 批量采集所有节点的物理卡显存 used/total，并写入 MySQL `accelerator_metric_sample`；右侧单卡实时明细仍直接查询 Prometheus。
+
+趋势接口统一从 MySQL 查询：`1h` 每分钟一桶（60 点）、`24h` 每 15 分钟一桶（96 点）、`7d` 每小时一桶（168 点）。桶内 `points` 使用平均显存利用率，`max_points` 保留最大值，`sample_counts` 返回有效样本数。没有采样的桶返回 `null`，前端显示为断线，不补 0。
+
+响应中的 `expected_bucket_count`、`populated_bucket_count`、`raw_sample_count`、`actual_start_timestamp`、`actual_end_timestamp` 和 `history_complete` 用于判断历史覆盖情况。首次部署最多尝试从 Prometheus 补采最近 90 分钟，不能恢复的升级前历史保持为空。
 
 ## 8. Pod 运维接口
 

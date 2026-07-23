@@ -1,8 +1,9 @@
-"""Prometheus-backed physical accelerator details and per-card trends."""
+"""Prometheus-backed realtime details and MySQL-backed per-card trends."""
 
 import math
 import re
 import time
+from datetime import datetime
 
 try:
     from backend.config import Config
@@ -11,17 +12,21 @@ except ModuleNotFoundError:
     from config import Config
     from services.prometheus_client import PrometheusClient
 
+from .accelerator_repository import load_accelerator_trend_buckets
 from .response import _error, _ok
-from .settings import _prometheus_gpu_usage_enabled
+from .settings import (
+    _accelerator_history_cluster_name,
+    _prometheus_gpu_usage_enabled,
+)
 
 
 NODE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,251}[A-Za-z0-9])?$")
 TREND_RANGES = {
     "1h": {"seconds": 60 * 60, "step": 60},
-    "24h": {"seconds": 24 * 60 * 60, "step": 5 * 60},
-    "7d": {"seconds": 7 * 24 * 60 * 60, "step": 30 * 60},
+    "24h": {"seconds": 24 * 60 * 60, "step": 15 * 60},
+    "7d": {"seconds": 7 * 24 * 60 * 60, "step": 60 * 60},
 }
-TREND_METRICS = {"gpu_utilization", "memory_utilization"}
+TREND_METRICS = {"memory_utilization"}
 
 
 NVIDIA_LABELS = "node, UUID, gpu, device, modelName"
@@ -76,36 +81,6 @@ def _instant_queries(node_name):
             "ascend",
             f"max by ({ASCEND_LABELS}) "
             f'(npu_chip_info_utilization{{job="npu-exporter",{selector}}})',
-        ),
-    }
-
-
-def _trend_queries(node_name, metric):
-    selector = f'node="{node_name}"'
-    if metric == "memory_utilization":
-        return {
-            "nvidia": (
-                f"100 * max by ({NVIDIA_LABELS}) "
-                f'(DCGM_FI_DEV_FB_USED{{job="nvidia-dcgm-exporter",{selector}}}) '
-                f"/ max by ({NVIDIA_LABELS}) "
-                f'(DCGM_FI_DEV_FB_TOTAL{{job="nvidia-dcgm-exporter",{selector}}})'
-            ),
-            "ascend": (
-                f"100 * max by ({ASCEND_LABELS}) "
-                f'(npu_chip_info_used_memory{{job="npu-exporter",{selector}}}) '
-                f"/ max by ({ASCEND_LABELS}) "
-                f'(npu_chip_info_total_memory{{job="npu-exporter",{selector}}})'
-            ),
-        }
-
-    return {
-        "nvidia": (
-            f"max by ({NVIDIA_LABELS}) "
-            f'(DCGM_FI_DEV_GPU_UTIL{{job="nvidia-dcgm-exporter",{selector}}})'
-        ),
-        "ascend": (
-            f"max by ({ASCEND_LABELS}) "
-            f'(npu_chip_info_utilization{{job="npu-exporter",{selector}}})'
         ),
     }
 
@@ -246,63 +221,128 @@ def node_gpu_details(node_name, node):
     })
 
 
-def _matrix_series(rows, vendor):
-    series = []
+def _timestamp_millis(start_timestamp, bucket_no, bucket_seconds):
+    return int((start_timestamp + bucket_no * bucket_seconds) * 1000)
+
+
+def _datetime_or_none(value):
+    return value if isinstance(value, datetime) else None
+
+
+def _build_history_series(rows, start_timestamp, bucket_seconds, bucket_count):
+    cards = {}
+    populated_buckets = set()
+
     for row in rows or []:
-        metric = row.get("metric") or {}
-        card_id = _card_identity(metric, vendor)
-        if not card_id:
+        card_id = str(row.get("card_id") or "").strip()
+        vendor = str(row.get("vendor") or "").strip()
+        try:
+            bucket_no = int(row.get("bucket_no"))
+        except (TypeError, ValueError):
+            continue
+        if not card_id or not vendor or not 0 <= bucket_no < bucket_count:
             continue
 
-        points = []
-        for raw_timestamp, raw_value in row.get("values") or []:
-            timestamp = _float_value(raw_timestamp)
-            value = _float_value(raw_value)
-            if timestamp is None or value is None:
-                continue
-            points.append([int(timestamp * 1000), round(min(max(value, 0), 100), 2)])
-
-        index = _card_index(metric, vendor)
-        series.append({
+        card = cards.setdefault((vendor, card_id), {
             "card_id": card_id,
             "vendor": vendor,
-            "device_index": index,
-            "device": metric.get("device") or metric.get("pcie_bus_info") or "",
+            "device_index": (
+                int(row["device_index"])
+                if row.get("device_index") is not None
+                else 10 ** 9
+            ),
+            "device": str(row.get("device_name") or ""),
             "display_name": "",
-            "model": _card_model(metric, vendor),
-            "points": points,
+            "model": str(row.get("model_name") or "Unknown"),
+            "buckets": {},
         })
-    return series
+        average = _float_value(row.get("utilization_avg"))
+        maximum = _float_value(row.get("utilization_max"))
+        card["buckets"][bucket_no] = {
+            "average": (
+                round(min(max(average, 0), 100), 2)
+                if average is not None
+                else None
+            ),
+            "maximum": (
+                round(min(max(maximum, 0), 100), 2)
+                if maximum is not None
+                else None
+            ),
+            "sample_count": int(row.get("sample_count") or 0),
+        }
+        if average is not None:
+            populated_buckets.add(bucket_no)
+
+    series = []
+    ordered = sorted(
+        cards.values(),
+        key=lambda item: (
+            item["vendor"],
+            item["device_index"],
+            item["card_id"],
+        ),
+    )
+    for display_index, card in enumerate(ordered):
+        points = []
+        max_points = []
+        sample_counts = []
+        for bucket_no in range(bucket_count):
+            timestamp = _timestamp_millis(
+                start_timestamp,
+                bucket_no,
+                bucket_seconds,
+            )
+            bucket = card["buckets"].get(bucket_no) or {}
+            points.append([timestamp, bucket.get("average")])
+            max_points.append([timestamp, bucket.get("maximum")])
+            sample_counts.append([timestamp, int(bucket.get("sample_count") or 0)])
+        card.pop("buckets", None)
+        card["display_name"] = _display_name(display_index)
+        card["points"] = points
+        card["max_points"] = max_points
+        card["sample_counts"] = sample_counts
+        series.append(card)
+
+    return series, populated_buckets
 
 
 def node_gpu_trend(node_name, metric, range_key, node, now_seconds=None):
     if metric not in TREND_METRICS:
-        return _error("metric must be gpu_utilization or memory_utilization", 400)
+        return _error("metric must be memory_utilization", 400)
     if range_key not in TREND_RANGES:
         return _error("range must be 1h, 24h or 7d", 400)
-
-    client, client_error = _client()
-    if client_error:
-        return _error(client_error, 503)
 
     config = TREND_RANGES[range_key]
     end = int(now_seconds if now_seconds is not None else time.time())
     start = end - config["seconds"]
-    series = []
-    diagnostics = []
+    bucket_count = int(config["seconds"] / config["step"])
+    bucket_result = load_accelerator_trend_buckets(
+        _accelerator_history_cluster_name(),
+        node_name,
+        datetime.fromtimestamp(start),
+        datetime.fromtimestamp(end),
+        config["step"],
+    )
+    if bucket_result.get("error"):
+        return _error(
+            "Failed to query physical accelerator history",
+            503,
+            {"history_error": bucket_result["error"]},
+        )
 
-    for vendor, promql in _trend_queries(node_name, metric).items():
-        rows, error = client.query_range(promql, start, end, config["step"])
-        if error:
-            diagnostics.append(vendor)
-            continue
-        series.extend(_matrix_series(rows, vendor))
-
-    series.sort(key=lambda item: (item["vendor"], item["device_index"], item["card_id"]))
-    for display_index, item in enumerate(series):
-        item["display_name"] = _display_name(display_index)
-    if not series and diagnostics:
-        return _error("Failed to query physical accelerator trend", 502, {"failed_queries": diagnostics})
+    series, populated_buckets = _build_history_series(
+        bucket_result.get("items") or [],
+        start,
+        config["step"],
+        bucket_count,
+    )
+    actual_start = _datetime_or_none(bucket_result.get("actual_start_at"))
+    actual_end = _datetime_or_none(bucket_result.get("actual_end_at"))
+    history_complete = bool(series) and all(
+        all(point[1] is not None for point in item["points"])
+        for item in series
+    )
 
     return _ok({
         "node": node,
@@ -313,6 +353,17 @@ def node_gpu_trend(node_name, metric, range_key, node, now_seconds=None):
         "step_seconds": config["step"],
         "series": series,
         "total": len(series),
-        "metric_source": "prometheus",
-        "diagnostics": {"failed_queries": diagnostics},
+        "metric_source": "mysql_accelerator_history",
+        "data_source": "accelerator_metric_sample",
+        "expected_bucket_count": bucket_count,
+        "populated_bucket_count": len(populated_buckets),
+        "raw_sample_count": int(bucket_result.get("raw_sample_count") or 0),
+        "actual_start_timestamp": (
+            int(actual_start.timestamp() * 1000) if actual_start else None
+        ),
+        "actual_end_timestamp": (
+            int(actual_end.timestamp() * 1000) if actual_end else None
+        ),
+        "history_complete": history_complete,
+        "diagnostics": {"history_error": None},
     })

@@ -1,7 +1,7 @@
 import json
 import os
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 
 try:
     from backend.db.mysql import get_connection
@@ -13,6 +13,12 @@ _MEMORY_STORE = []
 _MEMORY_LOCK = threading.Lock()
 _DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data")
 _DATA_FILE = os.path.join(_DATA_DIR, "operation_logs.json")
+_TIME_RANGE_DELTAS = {
+    "1h": timedelta(hours=1),
+    "1d": timedelta(days=1),
+    "7d": timedelta(days=7),
+    "30d": timedelta(days=30),
+}
 
 
 def _db_available():
@@ -82,15 +88,13 @@ def list_operation_logs(query: dict):
                 total = cur.fetchone()["total"]
 
                 page = query.get("page", 1)
-                page_size = query.get("page_size", 20)
+                page_size = query.get("page_size", 100)
                 offset = (page - 1) * page_size
                 cur.execute(
-                    f"SELECT * FROM operation_log WHERE {where_sql} ORDER BY created_at ASC, id ASC LIMIT %s OFFSET %s",
+                    f"SELECT * FROM operation_log WHERE {where_sql} ORDER BY created_at DESC, id DESC LIMIT %s OFFSET %s",
                     params + [page_size, offset],
                 )
-                rows = cur.fetchall()
-                for row in rows:
-                    row["created_at"] = _fmt_dt(row.get("created_at"))
+                rows = [_normalize_row(row) for row in cur.fetchall()]
                 return {"items": rows, "total": total}
         finally:
             conn.close()
@@ -98,9 +102,12 @@ def list_operation_logs(query: dict):
     items = _filter_memory_logs(query)
     total = len(items)
     page = query.get("page", 1)
-    page_size = query.get("page_size", 20)
+    page_size = query.get("page_size", 100)
     offset = (page - 1) * page_size
-    return {"items": items[offset:offset + page_size], "total": total}
+    return {
+        "items": [_normalize_row(item) for item in items[offset:offset + page_size]],
+        "total": total,
+    }
 
 
 def export_operation_logs(query: dict):
@@ -112,26 +119,88 @@ def export_operation_logs(query: dict):
 
             with conn.cursor() as cur:
                 cur.execute(
-                    f"SELECT * FROM operation_log WHERE {where_sql} ORDER BY created_at ASC, id ASC",
+                    f"SELECT * FROM operation_log WHERE {where_sql} ORDER BY created_at DESC, id DESC",
                     params,
                 )
-                rows = cur.fetchall()
-                for row in rows:
-                    row["created_at"] = _fmt_dt(row.get("created_at"))
-                return rows
+                return [_normalize_row(row) for row in cur.fetchall()]
         finally:
             conn.close()
 
-    return _filter_memory_logs(query)
+    return [_normalize_row(item) for item in _filter_memory_logs(query)]
+
+
+def count_operation_calls(operation_types, time_range, end_time=None):
+    end_time = end_time or datetime.now()
+    cutoff = _time_range_cutoff(time_range, now=end_time)
+
+    if _db_available():
+        conn = get_connection()
+        try:
+            placeholders = ", ".join(["%s"] * len(operation_types))
+            where_clauses = [f"operation_type IN ({placeholders})"]
+            params = list(operation_types)
+            if cutoff is not None:
+                where_clauses.append("created_at >= %s")
+                params.append(cutoff)
+            where_clauses.append("created_at <= %s")
+            params.append(end_time)
+
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""SELECT operation_type,
+                               COUNT(*) AS total_calls,
+                               SUM(CASE WHEN is_success <> 0 THEN 1 ELSE 0 END) AS success_count,
+                               SUM(CASE WHEN is_success = 0 THEN 1 ELSE 0 END) AS failure_count
+                        FROM operation_log
+                        WHERE {" AND ".join(where_clauses)}
+                        GROUP BY operation_type""",
+                    params,
+                )
+                rows = [dict(row) for row in cur.fetchall()]
+        finally:
+            conn.close()
+    else:
+        allowed_types = set(operation_types)
+        rows_by_type = {}
+        for item in _load_memory_logs():
+            operation_type = item.get("operation_type")
+            created_at = _parse_datetime(item.get("created_at"))
+            if operation_type not in allowed_types:
+                continue
+            if cutoff is not None and (created_at is None or created_at < cutoff):
+                continue
+            if created_at is None or created_at > end_time:
+                continue
+
+            counts = rows_by_type.setdefault(operation_type, {
+                "operation_type": operation_type,
+                "total_calls": 0,
+                "success_count": 0,
+                "failure_count": 0,
+            })
+            counts["total_calls"] += 1
+            if _is_success_value(item.get("is_success")):
+                counts["success_count"] += 1
+            else:
+                counts["failure_count"] += 1
+        rows = list(rows_by_type.values())
+
+    return {
+        "rows": rows,
+        "start_at": cutoff,
+        "end_at": end_time,
+    }
 
 
 def list_audit_envelope(query: dict):
     page = int(query.get("page", 1) or 1)
-    page_size = int(query.get("page_size", 20) or 20)
+    page_size = int(query.get("page_size", 100) or 100)
     result = list_operation_logs({
         "operator": query.get("operator", ""),
         "operation_type": query.get("operation_type", ""),
         "keyword": query.get("keyword", ""),
+        "operation_result": query.get("operation_result"),
+        "time_range": query.get("time_range", "all"),
         "page": page,
         "page_size": page_size,
     })
@@ -156,6 +225,13 @@ def _operation_log_filters(query: dict):
         where_clauses.append("(target_name LIKE %s OR error_message LIKE %s)")
         kw = f"%{query['keyword']}%"
         params.extend([kw, kw])
+    if query.get("operation_result") in (0, 1):
+        where_clauses.append("is_success = %s")
+        params.append(query["operation_result"])
+    cutoff = _time_range_cutoff(query.get("time_range"))
+    if cutoff is not None:
+        where_clauses.append("created_at >= %s")
+        params.append(cutoff)
     return where_clauses, params
 
 
@@ -175,8 +251,51 @@ def _filter_memory_logs(query: dict):
             r for r in items
             if kw in str(r.get("target_name", "")) or kw in str(r.get("error_message", ""))
         ]
+    if query.get("operation_result") in (0, 1):
+        expected = bool(query["operation_result"])
+        items = [r for r in items if bool(r.get("is_success")) is expected]
+    cutoff = _time_range_cutoff(query.get("time_range"))
+    if cutoff is not None:
+        items = [
+            r for r in items
+            if (_parse_datetime(r.get("created_at")) or datetime.min) >= cutoff
+        ]
 
     return sorted(items, key=lambda r: r.get("created_at", ""), reverse=True)
+
+
+def _time_range_cutoff(time_range, now=None):
+    delta = _TIME_RANGE_DELTAS.get(str(time_range or "").lower())
+    return (now or datetime.now()) - delta if delta is not None else None
+
+
+def _parse_datetime(value):
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_row(row):
+    item = dict(row or {})
+    item["created_at"] = _fmt_dt(item.get("created_at"))
+    item["is_success"] = _is_success_value(item.get("is_success"))
+    item["operator"] = str(item.get("operator") or "anonymous")
+    return item
+
+
+def _is_success_value(value):
+    return value not in (False, 0, "0", "false", None)
+
+
+def _load_memory_logs():
+    items = _load_file()
+    if items:
+        return items
+    with _MEMORY_LOCK:
+        return list(_MEMORY_STORE)
 
 
 def _load_file():

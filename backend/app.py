@@ -17,6 +17,7 @@ try:
     from backend.modules.deploy import deploy_bp
     from backend.modules.docs import docs_bp
     from backend.modules.logs import logs_bp
+    from backend.modules.logs.constants import DEPLOY_OPERATION_PATHS
     from backend.modules.logs.repository import save_operation_log
     from backend.modules.pods import pods_bp
     from backend.modules.ports import ports_bp
@@ -38,6 +39,7 @@ except ModuleNotFoundError:
     from modules.deploy import deploy_bp
     from modules.docs import docs_bp
     from modules.logs import logs_bp
+    from modules.logs.constants import DEPLOY_OPERATION_PATHS
     from modules.logs.repository import save_operation_log
     from modules.pods import pods_bp
     from modules.ports import ports_bp
@@ -117,16 +119,6 @@ def _register_auth_interceptor(app: Flask) -> None:
         return None
 
 
-DEPLOY_OPERATION_PATHS = {
-    "/api/deploy/check-available": "check_available",
-    "/api/deploy/create-default": "create",
-    "/api/deploy/retrieve": "retrieve",
-    "/api/deploy/release": "release",
-    "/api/deploy/reset": "reset",
-    "/api/deploy/list": "list",
-}
-
-
 def _register_log_middleware(app: Flask) -> None:
     @app.after_request
     def log_deploy_operations(response):
@@ -154,7 +146,7 @@ def _register_log_middleware(app: Flask) -> None:
             else:
                 target_name = ""
 
-            is_success = 1 if response.status_code < 400 else 0
+            is_success = response.status_code < 400
             error_message = ""
             if not is_success:
                 error_message = str(resp_body.get("msg", "") or resp_body.get("message", "") or "")
@@ -165,9 +157,9 @@ def _register_log_middleware(app: Flask) -> None:
             else:
                 operator_ip = request.headers.get("X-Real-IP", "").strip() or (request.remote_addr or "")
 
-            operator = ""
+            operator = "anonymous"
             if hasattr(g, "current_user") and g.current_user:
-                operator = str(g.current_user.get("username", ""))
+                operator = str(g.current_user.get("username") or "anonymous")
 
             save_operation_log({
                 "operation_type": operation_type,

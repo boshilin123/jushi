@@ -1,10 +1,16 @@
 import io
 import json
+from datetime import datetime
+from urllib.parse import quote
 
 from flask import Blueprint, Response, jsonify, request
 
 from . import service
-from .schema import normalize_audit_export, normalize_audit_list
+from .schema import (
+    normalize_audit_export,
+    normalize_audit_list,
+    normalize_call_statistics,
+)
 
 audits_bp = Blueprint("audits", __name__)
 
@@ -25,7 +31,7 @@ def list_audits():
             "list": data.get("list", []),
             "total": data.get("total", 0),
             "page": data.get("page", 1),
-            "page_size": data.get("page_size", 20),
+            "page_size": data.get("page_size", 100),
         },
     })
 
@@ -38,20 +44,49 @@ def export_audits():
     fmt = query.get("format", "json")
 
     if fmt == "excel":
-        return _export_excel(records)
-    return _export_json(records)
+        return _export_excel(records, query)
+    return _export_json(records, query)
 
 
-def _export_json(records: list):
+@audits_bp.get("/call-statistics")
+def call_statistics():
+    query, error = normalize_call_statistics(request.args)
+    if error:
+        return jsonify({
+            "is_success": False,
+            "http_status_code": 400,
+            "msg": error,
+        }), 400
+
+    return jsonify(service.get_call_statistics(query["time_range"]))
+
+
+def _export_filename(extension: str, time_range: str):
+    range_name = time_range if time_range in {"1h", "1d", "7d", "30d"} else "全部"
+    return f"{datetime.now():%Y%m%d}_审计日志_{range_name}.{extension}"
+
+
+def _download_headers(filename: str):
+    ascii_fallback = f"audit_logs_{datetime.now():%Y%m%d}.{filename.rsplit('.', 1)[-1]}"
+    return {
+        "Content-Disposition": (
+            f"attachment; filename*=UTF-8''{quote(filename)}; "
+            f"filename={ascii_fallback}"
+        )
+    }
+
+
+def _export_json(records: list, query: dict):
     json_str = json.dumps(records, ensure_ascii=False, indent=2, default=str)
+    filename = _export_filename("json", query.get("time_range", "all"))
     return Response(
         json_str,
         mimetype="application/json",
-        headers={"Content-Disposition": "attachment; filename=audit_logs.json"},
+        headers=_download_headers(filename),
     )
 
 
-def _export_excel(records: list):
+def _export_excel(records: list, query: dict):
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
 
@@ -105,9 +140,10 @@ def _export_excel(records: list):
     output = io.BytesIO()
     wb.save(output)
     output.seek(0)
+    filename = _export_filename("xlsx", query.get("time_range", "all"))
 
     return Response(
         output.getvalue(),
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=audit_logs.xlsx"},
+        headers=_download_headers(filename),
     )

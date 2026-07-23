@@ -10,7 +10,12 @@ except ModuleNotFoundError:
 
 def operation_logs(query: dict) -> dict:
     result = repository.list_operation_logs(query)
-    return {"items": result["items"], "total": result["total"]}
+    return {
+        "items": result["items"],
+        "total": result["total"],
+        "page": query.get("page", 1),
+        "page_size": query.get("page_size", 100),
+    }
 
 
 def instance_logs(query: dict) -> dict:

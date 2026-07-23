@@ -263,6 +263,7 @@ SHOW COLUMNS FROM alert_event;
 
 - `backend/db/init.sql` 只会在 MySQL 数据目录首次初始化时执行；单纯重建 `jushi-api` 或 `jushi-mysql` 容器不会重复执行初始化 SQL。
 - 已有离线环境增加节点单卡历史表时，必须显式执行 `backend/db/migrations/20260723_001_create_accelerator_metric_sample.sql`。完整步骤见 [节点单卡历史离线升级说明](accelerator-history-offline-upgrade.md)。
+- 已有环境启用审计调用统计前，应显式执行幂等迁移 `backend/db/migrations/20260723_002_add_operation_log_statistics_index.sql`，为时间范围聚合补充查询索引；该迁移不修改或删除已有日志数据。
 - 当前释放部署为软删除：`deploy_instance.status` 会更新为 `released`，列表接口会过滤 released 记录。
 - 告警表的兼容字段由后端 `ensure_alert_schema()` 在访问告警接口时补齐，首次调用 `/api/alerts/list` 时会检查并补充 `instance_name`、`deployment_name`、`fingerprint` 等列。
 

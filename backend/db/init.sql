@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS operation_log (
   http_status_code INT DEFAULT NULL COMMENT 'HTTP 响应状态码',
   is_success TINYINT(1) NOT NULL DEFAULT 0 COMMENT '操作是否成功：1 成功，0 失败',
   error_message TEXT DEFAULT NULL COMMENT '失败原因或异常信息',
-  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  KEY idx_operation_log_time_type_success (created_at, operation_type, is_success)
 ) COMMENT='操作日志表，用于审计用户关键操作';
 
 CREATE TABLE IF NOT EXISTS alert_event (

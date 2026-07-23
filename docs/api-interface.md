@@ -1757,7 +1757,7 @@ POST /api/alerts/reopen
 GET /api/logs/operations
 ```
 
-当前状态：后端已实现。查询 `operation_log` 表，部署类接口会通过 Flask `after_request` 中间件自动写入操作日志。
+当前状态：后端已实现。查询 `operation_log` 表，部署类接口会通过 Flask `after_request` 中间件自动写入操作日志。列表按 `created_at DESC, id DESC` 返回最新记录，默认每页 100 条。
 
 查询参数：
 
@@ -1765,9 +1765,11 @@ GET /api/logs/operations
 | --- | --- | --- | --- |
 | `operator` | string | 否 | 操作人 |
 | `operation_type` | string | 否 | 操作类型 |
-| `keyword` | string | 否 | 关键词 |
+| `keyword` | string | 否 | 操作对象或错误信息关键词 |
+| `operation_result` | string | 否 | `success` 或 `failure` |
+| `time_range` | string | 否 | `1h`、`1d`、`7d`、`30d`、`all` |
 | `page` | number | 否 | 页码 |
-| `page_size` | number | 否 | 每页数量 |
+| `page_size` | number | 否 | 每页数量，默认和最大值均为 100 |
 
 响应：
 
@@ -1782,7 +1784,10 @@ GET /api/logs/operations
       "is_success": true,
       "created_at": "2026-05-21 15:30:00"
     }
-  ]
+  ],
+  "total": 1,
+  "page": 1,
+  "page_size": 100
 }
 ```
 
@@ -1837,7 +1842,7 @@ GET /api/logs/pod
 POST /api/audits/list
 ```
 
-当前状态：后端已实现。查询 `operation_log` 并按审计 envelope 返回，支持 `operator`、`operation_type`、`keyword`、分页等筛选。
+当前状态：后端已实现。查询 `operation_log` 并按审计 envelope 返回，支持 `operator`、`operation_type`、`keyword`、`operation_result`、`time_range` 和分页筛选，结果按最新时间倒序。
 
 请求：
 
@@ -1847,12 +1852,12 @@ POST /api/audits/list
   "serial": "serial-001",
   "context": "list audits",
   "content": {
-    "result": "all",
+    "operation_result": "success",
     "operator": "admin",
     "time_range": "7d",
     "keyword": "vGPU",
     "page": 1,
-    "page_size": 20
+    "page_size": 100
   }
 }
 ```
@@ -1909,7 +1914,7 @@ Content-Type: multipart/form-data
 POST /api/audits/export
 ```
 
-当前状态：后端已实现。按筛选条件导出 `operation_log`，`content.format = json` 时返回 JSON 文件，`content.format = excel` 时返回 Excel xlsx 文件。
+当前状态：后端已实现。按筛选条件导出 `operation_log`，`content.time_range` 支持 `1h`、`1d`、`7d`、`30d`、`all`。`content.format = json` 时返回 JSON 文件，`content.format = excel` 时返回 Excel xlsx 文件。
 
 请求：
 
@@ -1920,6 +1925,8 @@ POST /api/audits/export
   "context": "export audits",
   "content": {
     "format": "excel",
+    "time_range": "7d",
+    "operation_result": "success",
     "operator": "admin",
     "operation_type": "create",
     "keyword": "nvidia"
@@ -1929,7 +1936,50 @@ POST /api/audits/export
 
 响应：
 
-返回文件流。`format = json` 时响应 `Content-Type: application/json`，文件名 `audit_logs.json`；`format = excel` 时响应 `Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`，文件名 `audit_logs.xlsx`。
+返回文件流。`format = json` 时响应 `Content-Type: application/json`；`format = excel` 时响应 `Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`。文件名统一为 `YYYYMMDD_审计日志_导出范围`，例如 `20260723_审计日志_7d.xlsx`。
+
+### 10.7 六类部署接口调用统计
+
+```http
+GET /api/audits/call-statistics?time_range=7d
+Authorization: Bearer <login_token>
+```
+
+当前状态：后端已实现。基于 `operation_log` 聚合自动审计覆盖的六类部署接口，`time_range` 支持 `1h`、`1d`、`7d`、`30d`、`all`，缺省值为 `1h`。统计总调用数，并分别返回成功和失败数量；所选时间范围内没有记录的接口仍会返回，数量为 0。`all` 的 `start_at` 为 `null`。
+
+响应：
+
+```json
+{
+  "is_success": true,
+  "time_range": "7d",
+  "start_at": "2026-07-16 15:00:00",
+  "end_at": "2026-07-23 15:00:00",
+  "total_calls": 38,
+  "success_count": 35,
+  "failure_count": 3,
+  "items": [
+    {
+      "operation_type": "check_available",
+      "method": "POST",
+      "path": "/api/deploy/check-available",
+      "total_calls": 12,
+      "success_count": 11,
+      "failure_count": 1
+    },
+    {
+      "operation_type": "create",
+      "method": "POST",
+      "path": "/api/deploy/create-default",
+      "total_calls": 5,
+      "success_count": 4,
+      "failure_count": 1
+    }
+  ]
+}
+```
+
+`items` 固定按 `check_available`、`create`、`retrieve`、`release`、`reset`、`list` 返回。非法 `time_range` 返回 HTTP 400。
 
 ## 11. 前后端字段对齐说明
 
@@ -2091,6 +2141,7 @@ GET  /api/logs/instance
 GET  /api/logs/pod
 POST /api/audits/list
 POST /api/audits/export
+GET  /api/audits/call-statistics
 ```
 
 其中已接入真实 MySQL 或 PaaS 能力的接口：
@@ -2141,6 +2192,7 @@ GET  /api/logs/instance
 GET  /api/logs/pod
 POST /api/audits/list
 POST /api/audits/export
+GET  /api/audits/call-statistics
 ```
 
 后续业务增强或暂缓接口：

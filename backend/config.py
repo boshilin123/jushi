@@ -22,3 +22,7 @@ class Config:
     PROMETHEUS_BASE_URL = os.getenv("PROMETHEUS_BASE_URL", "")
     PROMETHEUS_TOKEN = (os.getenv("PROMETHEUS_TOKEN") or "").strip('"')
     PROMETHEUS_TIMEOUT_SECONDS = int(os.getenv("PROMETHEUS_TIMEOUT_SECONDS", "5"))
+
+    # 老版本部署脚本通过内部接口上报六类部署操作。密钥为空时接口保持关闭。
+    AUDIT_INGEST_KEY = (os.getenv("AUDIT_INGEST_KEY") or "").strip()
+    AUDIT_INGEST_MAX_BYTES = int(os.getenv("AUDIT_INGEST_MAX_BYTES", "262144"))

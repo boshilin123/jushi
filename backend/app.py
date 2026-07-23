@@ -16,7 +16,7 @@ try:
     from backend.modules.cluster import cluster_bp
     from backend.modules.deploy import deploy_bp
     from backend.modules.docs import docs_bp
-    from backend.modules.logs import logs_bp
+    from backend.modules.logs import internal_audit_bp, logs_bp
     from backend.modules.logs.constants import DEPLOY_OPERATION_PATHS
     from backend.modules.logs.repository import save_operation_log
     from backend.modules.pods import pods_bp
@@ -38,7 +38,7 @@ except ModuleNotFoundError:
     from modules.cluster import cluster_bp
     from modules.deploy import deploy_bp
     from modules.docs import docs_bp
-    from modules.logs import logs_bp
+    from modules.logs import internal_audit_bp, logs_bp
     from modules.logs.constants import DEPLOY_OPERATION_PATHS
     from modules.logs.repository import save_operation_log
     from modules.pods import pods_bp
@@ -56,6 +56,7 @@ except ModuleNotFoundError:
 AUTH_EXEMPT_PATHS = {
     "/api/system/health",
     "/api/auth/login",
+    "/api/internal/audit-events",
     "/api/system/logo",         # GET 免登录，POST/PUT 内部自行校验
     "/api/system/logo/file",    # GET 免登录（返回图片文件）
     "/api/system/logo/enable",  # PUT 内部自行校验管理员
@@ -191,7 +192,7 @@ def create_app() -> Flask:
         @app.after_request
         def add_cors_headers(response):
             response.headers["Access-Control-Allow-Origin"] = "*"
-            response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-User"
+            response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-User, X-Audit-Key"
             response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
             return response
 
@@ -210,6 +211,7 @@ def create_app() -> Flask:
     app.register_blueprint(pods_bp, url_prefix="/api/pods")
     app.register_blueprint(alerts_bp, url_prefix="/api/alerts")
     app.register_blueprint(logs_bp, url_prefix="/api/logs")
+    app.register_blueprint(internal_audit_bp, url_prefix="/api/internal")
     app.register_blueprint(audits_bp, url_prefix="/api/audits")
 
     docs_port = _resolve_docs_port()

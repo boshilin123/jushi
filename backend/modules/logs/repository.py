@@ -73,6 +73,60 @@ def save_operation_log(record: dict):
     return {"is_success": True}
 
 
+def save_external_operation_log(record: dict):
+    """写入老脚本上报的操作日志；event_id 保证断线重试不会重复计数。"""
+    if _db_available():
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                affected = cur.execute(
+                    """INSERT INTO operation_log
+                       (event_id, source, operation_type, operator, operator_ip,
+                        target_type, target_name, request_payload, response_payload,
+                        http_status_code, is_success, error_message, created_at)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                               COALESCE(%s, CURRENT_TIMESTAMP))
+                       ON DUPLICATE KEY UPDATE event_id = VALUES(event_id)""",
+                    (
+                        record.get("event_id"),
+                        record.get("source", "legacy"),
+                        record.get("operation_type", ""),
+                        record.get("operator", ""),
+                        record.get("operator_ip", ""),
+                        record.get("target_type", ""),
+                        record.get("target_name", ""),
+                        record.get("request_payload", ""),
+                        record.get("response_payload", ""),
+                        record.get("http_status_code", 0),
+                        record.get("is_success", 0),
+                        record.get("error_message", ""),
+                        record.get("created_at"),
+                    ),
+                )
+            return {"is_success": True, "duplicate": affected == 0}
+        finally:
+            conn.close()
+
+    event_id = record.get("event_id")
+    existing_items = _load_memory_logs()
+    existing = next(
+        (item for item in existing_items if item.get("event_id") == event_id),
+        None,
+    )
+    if existing:
+        return {"is_success": True, "duplicate": True}
+
+    entry = dict(record)
+    entry["id"] = _next_id()
+    entry["created_at"] = _fmt_dt(entry.get("created_at") or datetime.now())
+    with _MEMORY_LOCK:
+        _MEMORY_STORE.append(entry)
+        memory_items = list(_MEMORY_STORE)
+    persisted_items = existing_items + [entry] if existing_items else memory_items
+    _save_file(persisted_items)
+    return {"is_success": True, "duplicate": False}
+
+
 def list_operation_logs(query: dict):
     if _db_available():
         conn = get_connection()

@@ -1,4 +1,7 @@
+import json
+
 from . import repository
+from .constants import DEPLOY_OPERATION_PATHS
 
 try:
     from backend.config import Config
@@ -16,6 +19,63 @@ def operation_logs(query: dict) -> dict:
         "page": query.get("page", 1),
         "page_size": query.get("page_size", 100),
     }
+
+
+_SENSITIVE_KEYS = {
+    "authorization",
+    "cookie",
+    "password",
+    "passwd",
+    "secret",
+    "token",
+}
+_MAX_SNAPSHOT_CHARS = 65535
+
+
+def ingest_legacy_audit_event(event: dict) -> dict:
+    request_payload = _redact_sensitive(event.get("request_payload") or {})
+    response_payload = _redact_sensitive(event.get("response_payload") or {})
+    record = {
+        "event_id": event["event_id"],
+        "source": event["source"],
+        "operation_type": DEPLOY_OPERATION_PATHS[event["path"]],
+        "operator": event.get("operator") or "legacy-system",
+        "operator_ip": event.get("operator_ip") or "",
+        "target_type": "deploy",
+        "target_name": event.get("target_name") or "",
+        "request_payload": _json_snapshot(request_payload),
+        "response_payload": _json_snapshot(response_payload),
+        "http_status_code": event["http_status_code"],
+        "is_success": event["is_success"],
+        "error_message": event.get("error_message") or "",
+        "created_at": event.get("occurred_at"),
+    }
+    return repository.save_external_operation_log(record)
+
+
+def _redact_sensitive(value):
+    if isinstance(value, dict):
+        return {
+            str(key): (
+                "[REDACTED]"
+                if str(key).lower() in _SENSITIVE_KEYS
+                else _redact_sensitive(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_sensitive(item) for item in value]
+    return value
+
+
+def _json_snapshot(value):
+    serialized = json.dumps(value, ensure_ascii=False, default=str)
+    if len(serialized) <= _MAX_SNAPSHOT_CHARS:
+        return serialized
+    return json.dumps(
+        {"truncated": True, "preview": serialized[:_MAX_SNAPSHOT_CHARS]},
+        ensure_ascii=False,
+    )
 
 
 def instance_logs(query: dict) -> dict:

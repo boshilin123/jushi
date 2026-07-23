@@ -1341,6 +1341,22 @@ GET /api/resources/recommendation
 
 当前状态：后端已实现。根据当前 GPU、vGPU、显存、算力和节点压力返回资源使用建议。
 
+### 7.8 节点物理加速卡实时明细
+
+```http
+GET /api/resources/nodes/{node_name}/gpus
+```
+
+当前状态：后端已实现。仅允许查询 Ready、可调度节点；根据 Prometheus 的 NVIDIA `UUID` 或 Ascend `vdie_id` 动态返回真实物理卡数量、计算利用率、显存已用量/总量和显存利用率。本期未启用 GPU 虚拟化，因此不返回 vGPU 指标，也不推断单张物理卡的分配状态。
+
+### 7.9 节点物理加速卡趋势
+
+```http
+GET /api/resources/nodes/{node_name}/gpu-trend?metric=gpu_utilization&range=1h
+```
+
+`metric` 支持 `gpu_utilization`（计算核心忙碌率）和 `memory_utilization`（显存已用量/总量），`range` 支持 `1h`、`24h`、`7d`。响应按稳定物理卡标识返回 series，并携带完整查询起止时间。历史不足时不插值、不复制数据，前端应显示真实空白区间。
+
 ## 8. Pod 运维接口
 
 ### 8.1 Pod 列表

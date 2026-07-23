@@ -1,4 +1,4 @@
-"""Small reusable client for Prometheus instant queries."""
+"""Small reusable client for Prometheus instant and range queries."""
 
 
 class PrometheusClient:
@@ -16,6 +16,21 @@ class PrometheusClient:
         )
 
     def query(self, promql: str):
+        return self._request("/api/v1/query", {"query": promql})
+
+    def query_range(self, promql: str, start, end, step):
+        """Run a Prometheus range query and return the matrix rows."""
+        return self._request(
+            "/api/v1/query_range",
+            {
+                "query": promql,
+                "start": start,
+                "end": end,
+                "step": step,
+            },
+        )
+
+    def _request(self, path: str, params: dict):
         if not self.base_url:
             return None, "PROMETHEUS_BASE_URL is not configured"
 
@@ -27,8 +42,8 @@ class PrometheusClient:
             import requests
 
             response = requests.get(
-                f"{self.base_url}/api/v1/query",
-                params={"query": promql},
+                f"{self.base_url}{path}",
+                params=params,
                 headers=headers,
                 timeout=self.timeout_seconds,
             )

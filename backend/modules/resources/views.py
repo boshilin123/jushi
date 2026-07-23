@@ -20,6 +20,7 @@ from .parser import (
     _node_gpu_mode,
     _node_gpu_vendor,
     _node_name,
+    _node_schedulable,
     _node_status,
     _node_vgpu_per_gpu,
     _percent,
@@ -111,6 +112,7 @@ def _nodes_from_context(context, query, node_rows=None):
         item = {
             "node_name": node_name,
             "status": _node_status(node),
+            "schedulable": _node_schedulable(node),
             "health_level": level,
             "health_text": _health_text(level),
             "gpu_model": _extract_gpu_model(node),

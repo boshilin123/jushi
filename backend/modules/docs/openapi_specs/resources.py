@@ -15,6 +15,64 @@ RESOURCE_PATHS = {
             "responses": {"200": {"description": "节点列表"}},
         }
     },
+    "/api/resources/nodes/{node_name}/gpus": {
+        "get": {
+            "tags": ["Resources"],
+            "summary": "节点物理加速卡实时明细",
+            "description": "查询 Ready、可调度节点上的真实 NVIDIA GPU 或 Ascend NPU 单卡利用率与显存明细。卡数根据 Prometheus 稳定设备标识动态生成，不包含 vGPU。",
+            "parameters": [
+                {
+                    "name": "node_name",
+                    "in": "path",
+                    "required": True,
+                    "schema": {"type": "string"},
+                }
+            ],
+            "responses": {
+                "200": {"description": "节点单卡实时明细或可读业务错误"},
+                "401": {"description": "未登录"},
+            },
+        }
+    },
+    "/api/resources/nodes/{node_name}/gpu-trend": {
+        "get": {
+            "tags": ["Resources"],
+            "summary": "节点物理加速卡趋势",
+            "description": "按真实物理卡返回计算利用率或显存利用率历史序列。时间范围缺少历史时保留真实时间边界，不补点、不伪造数据。",
+            "parameters": [
+                {
+                    "name": "node_name",
+                    "in": "path",
+                    "required": True,
+                    "schema": {"type": "string"},
+                },
+                {
+                    "name": "metric",
+                    "in": "query",
+                    "required": False,
+                    "schema": {
+                        "type": "string",
+                        "enum": ["gpu_utilization", "memory_utilization"],
+                        "default": "gpu_utilization",
+                    },
+                },
+                {
+                    "name": "range",
+                    "in": "query",
+                    "required": False,
+                    "schema": {
+                        "type": "string",
+                        "enum": ["1h", "24h", "7d"],
+                        "default": "1h",
+                    },
+                },
+            ],
+            "responses": {
+                "200": {"description": "节点单卡趋势或可读业务错误"},
+                "401": {"description": "未登录"},
+            },
+        }
+    },
     "/api/resources/gpus": {
         "get": {
             "tags": ["Resources"],

@@ -23,6 +23,18 @@ def nodes():
     return jsonify(service.nodes(normalize_resource_query(request.args)))
 
 
+@resources_bp.get("/nodes/<node_name>/gpus")
+def node_gpus(node_name):
+    # Ready、可调度节点的真实物理 GPU/NPU 单卡实时指标。
+    return jsonify(service.node_gpus(node_name, normalize_resource_query(request.args)))
+
+
+@resources_bp.get("/nodes/<node_name>/gpu-trend")
+def node_gpu_trend(node_name):
+    # 按稳定物理卡标识返回计算利用率或显存利用率历史矩阵。
+    return jsonify(service.node_gpu_trend(node_name, normalize_resource_query(request.args)))
+
+
 @resources_bp.get("/gpus")
 def gpus():
     # GPU / vGPU / 显存 / 算力资源统计：按资源名和显卡型号做聚合。

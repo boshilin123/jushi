@@ -65,6 +65,35 @@ class PrometheusClientTests(unittest.TestCase):
         self.assertIsNone(rows)
         self.assertEqual(error, "bad query")
 
+    def test_query_range_passes_time_window_and_step(self):
+        calls = []
+
+        def get(url, **kwargs):
+            calls.append((url, kwargs))
+            return _Response({
+                "status": "success",
+                "data": {"resultType": "matrix", "result": []},
+            })
+
+        fake_requests = SimpleNamespace(get=get)
+        with patch.dict(sys.modules, {"requests": fake_requests}):
+            rows, error = PrometheusClient("https://prometheus.example").query_range(
+                "up",
+                100,
+                200,
+                30,
+            )
+
+        self.assertIsNone(error)
+        self.assertEqual(rows, [])
+        self.assertEqual(calls[0][0], "https://prometheus.example/api/v1/query_range")
+        self.assertEqual(calls[0][1]["params"], {
+            "query": "up",
+            "start": 100,
+            "end": 200,
+            "step": 30,
+        })
+
 
 if __name__ == "__main__":
     unittest.main()

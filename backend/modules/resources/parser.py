@@ -594,3 +594,8 @@ def _node_status(node):
             return "Ready" if condition.get("status") == "True" else "NotReady"
     return _safe_get(node, "status", "phase", default="Unknown")
 
+
+def _node_schedulable(node):
+    return _node_status(node) == "Ready" and not bool(
+        _safe_get(node, "spec", "unschedulable", default=False)
+    )
